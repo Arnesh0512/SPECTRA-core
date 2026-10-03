@@ -34,12 +34,26 @@ class ArtifactScanOrchestrator:
         excluded = self.config.source_scanner.excluded_directories
 
         # 1. Scan Certificates & Keys
-        if progress_callback:
-            progress_callback("Domain 2/4: Auditing X.509 Certificates & Asymmetric Keys...", 45.0)
-        cert_findings: List[CertFinding] = self.cert_scanner.scan_directory(
-            target_dir, excluded_dirs=excluded, progress_callback=progress_callback
-        )
-        log_info(f"Discovered {len(cert_findings)} certificate/key artifact(s).")
+        scan_certs_enabled = getattr(self.config.scanners, "scan_certificates", True)
+        cert_findings: List[CertFinding] = []
+        if scan_certs_enabled:
+            include_sys = getattr(self.config.scanners, "include_system_certs", False)
+            if progress_callback:
+                progress_callback("Domain 2/4: Auditing X.509 Certificates & Asymmetric Keys...", 45.0)
+            cert_findings = self.cert_scanner.scan_directory(
+                target_dir,
+                excluded_dirs=excluded,
+                include_system_certs=include_sys,
+                progress_callback=progress_callback
+            )
+            project_count = sum(1 for c in cert_findings if not c.is_system_ca)
+            system_count = sum(1 for c in cert_findings if c.is_system_ca)
+            if include_sys:
+                log_info(f"Discovered {project_count} project certificate/key artifact(s) and {system_count} preinstalled OS root CA(s).")
+            else:
+                log_info(f"Discovered {project_count} project certificate/key artifact(s) (preinstalled OS root CAs bypassed).")
+        else:
+            log_info("Certificate and key scanning bypassed by configuration.")
 
         # 2. Scan Binaries & Shared Libraries
         if progress_callback:

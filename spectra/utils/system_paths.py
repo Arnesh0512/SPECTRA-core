@@ -12,7 +12,7 @@ from pathlib import Path
 import platform
 import re
 import sys
-from typing import List, Optional, Set
+from typing import Any, List, Optional, Set
 
 
 def discover_root_mounts(target_dir: Optional[Path] = None) -> List[Path]:
@@ -148,10 +148,15 @@ def get_webserver_config_paths(target_dir: Optional[Path] = None) -> List[Path]:
     return candidate_paths
 
 
-def get_certificate_system_paths(target_dir: Optional[Path] = None) -> List[Path]:
+def get_certificate_system_paths(
+    target_dir: Optional[Path] = None,
+    include_system_certs: bool = False,
+) -> List[Path]:
     """
     Returns all existing directories likely to contain system SSL/TLS certificates,
-    private keys, and CA trust stores across target_dir and all discovered roots.
+    private keys, and custom CA trust stores across target_dir and all discovered roots.
+    When include_system_certs is False, OS vendor public root CA directories
+    (e.g., usr/share/ca-certificates) are completely excluded.
     """
     candidate_paths: List[Path] = []
     seen: Set[str] = set()
@@ -180,20 +185,184 @@ def get_certificate_system_paths(target_dir: Optional[Path] = None) -> List[Path
         "etc/ssl",
         "etc/pki/tls/certs",
         "etc/pki/tls/private",
-        "etc/pki/ca-trust",
-        "etc/ca-certificates",
         "usr/local/share/ca-certificates",
-        "usr/share/ca-certificates",
         "var/ssl",
         "Program Files/OpenSSL-Win64",
         "Program Files/Common Files/SSL",
     ]
+
+    # Only include preinstalled OS vendor trust store repositories if requested
+    if include_system_certs:
+        subdirs.extend([
+            "usr/share/ca-certificates",
+            "etc/pki/ca-trust",
+            "etc/ca-certificates",
+        ])
 
     for root in discover_root_mounts(target_dir):
         for sub in subdirs:
             _add_path(root / sub)
 
     return candidate_paths
+
+
+OS_BUNDLE_FILENAMES = {
+    "ca-certificates.crt",
+    "ca-bundle.crt",
+    "ca-bundle.trust.crt",
+    "email-ca-bundle.pem",
+    "objsign-ca-bundle.pem",
+    "java-cacerts.jks",
+    "tls-ca-bundle.pem",
+}
+
+KNOWN_PUBLIC_CA_TOKENS = {
+    "digicert", "globalsign", "sectigo", "godaddy", "entrust", "amazon",
+    "microsoft", "google trust services", "gts", "isrg root", "let's encrypt",
+    "lets encrypt", "baltimore", "verisign", "comodo", "d-trust", "buypass",
+    "harica", "certum", "swisssign", "identrust", "telia", "tubitak",
+    "taiwan electronic", "hongkong post", "oiste", "quovadis", "chunghwa",
+    "actalis", "sk id solutions", "affirmtrust", "emsign", "vtrus", "bjca",
+    "ca disig", "certigna", "globaltrust", "szafir", "hipki", "anet",
+    "ac cv", "fnmt-rcm", "netlock", "securesign", "certsign", "usertrust",
+    "commscope", "telekom security", "starfield", "tuntrust", "t-telesec",
+    "xramp", "hellenic academic", "securetrust", "twca", "autoridad de certificacion",
+    "firmaprofesional", "uca extended", "uca global", "naver global", "izenpe",
+    "epki root", "microsec", "secom", "cfca", "ssl.com", "trustwave", "atos",
+    "certainly", "gdca", "e-szigno", "trustasia", "security communication"
+}
+
+
+def is_preinstalled_system_ca(
+    file_path: Path,
+    target_dir: Optional[Path] = None,
+    cert: Optional[Any] = None,
+) -> bool:
+    """
+    Differentiates between preinstalled OS vendor Root CAs (e.g., Mozilla CA store)
+    and user/application-configured certificates and keys.
+    """
+    p_str = str(file_path).replace("\\", "/")
+    p_lower = p_str.lower()
+    name_lower = file_path.name.lower()
+
+    # 1. Any artifact within the project target perimeter is ALWAYS user/application
+    if target_dir:
+        try:
+            t_resolved = str(target_dir.resolve()).replace("\\", "/") if not str(target_dir).startswith("/proc/") else str(target_dir).replace("\\", "/")
+            f_resolved = str(file_path.resolve()).replace("\\", "/") if not str(file_path).startswith("/proc/") else p_str
+            if f_resolved.startswith(t_resolved.rstrip("/") + "/"):
+                return False
+        except Exception:
+            pass
+
+    # 2. Private keys, keystores, and SSH credentials are NEVER preinstalled OS root CAs
+    if (
+        name_lower.endswith(".key")
+        or name_lower.endswith(".p12")
+        or name_lower.endswith(".jks")
+        or "private" in name_lower
+        or "id_rsa" in name_lower
+        or "id_ed25519" in name_lower
+        or "/keys/" in p_lower
+        or "/private/" in p_lower
+    ):
+        return False
+
+    # 3. Known monolithic OS CA bundle files
+    if name_lower in OS_BUNDLE_FILENAMES:
+        return True
+
+    # 4. Known OS vendor CA store directories and paths - ALWAYS preinstalled system CA
+    if "/mozilla/" in p_lower:
+        return True
+    if "/usr/share/ca-certificates/" in p_lower and "/usr/local/" not in p_lower:
+        return True
+    if any(tok in p_lower for tok in [
+        "/ca-certificates/extracted/",
+        "/pki/ca-trust-source/",
+        "/pki/ca-trust/extracted/",
+        "/etc/ca-certificates/",
+    ]):
+        return True
+
+    # 5. Check if file is a symlink pointing to OS vendor stores or system bundles
+    try:
+        if file_path.is_symlink():
+            link_target = ""
+            try:
+                import os
+                link_target = str(os.readlink(str(file_path))).replace("\\", "/").lower()
+            except Exception:
+                pass
+            resolved_target = str(file_path.resolve()).replace("\\", "/").lower()
+            all_target_str = f"{link_target} {resolved_target}"
+            if any(token in all_target_str for token in [
+                "/mozilla/",
+                "/usr/share/ca-certificates/",
+                "/ca-certificates/extracted/",
+                "/pki/ca-trust/",
+                "ca-certificates.crt",
+                "ca-bundle.crt",
+            ]):
+                return True
+    except Exception:
+        pass
+
+    # 6. Check if file is located in another system CA path (e.g. /etc/ssl/certs, /etc/pki/tls/certs)
+    in_system_ca_path = any(
+        sys_token in p_lower for sys_token in [
+            "/etc/ssl/certs",
+            "/etc/pki/tls/certs",
+        ]
+    )
+
+    if not in_system_ca_path:
+        return False
+
+    # 7. If inside system CA path, inspect certificate properties if available
+    if cert:
+        from cryptography import x509
+        # Check basic constraints
+        is_ca = False
+        try:
+            bc = cert.extensions.get_extension_for_oid(x509.ExtensionOID.BASIC_CONSTRAINTS)
+            is_ca = bc.value.ca
+        except Exception:
+            pass
+
+        # Check SANs (Subject Alternative Names) - Server/End-Entity certs have DNS SANs
+        has_san = False
+        try:
+            san = cert.extensions.get_extension_for_oid(x509.ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
+            has_san = len(san.value) > 0
+        except Exception:
+            pass
+
+        # If it is NOT a CA, or has SAN hostnames, it is a user/service server cert!
+        if not is_ca or has_san:
+            return False
+
+        # If it is a CA, check if it's a known public CA or custom user CA
+        try:
+            subj = cert.subject.rfc4514_string().lower()
+            # If "nexis" or project/internal names are in the subject, it's a user CA
+            if any(internal_kw in subj for internal_kw in ["nexis", "internal", "local", "corp", "private", "test", "dev", "myca", "custom"]):
+                return False
+            # Check subject and issuer
+            issuer = cert.issuer.rfc4514_string().lower()
+            if any(pub_token in subj or pub_token in issuer or pub_token in name_lower for pub_token in KNOWN_PUBLIC_CA_TOKENS):
+                return True
+            # In /etc/ssl/certs, a CA without internal naming is typically an OS root CA
+            return True
+        except Exception:
+            pass
+
+    # If it's in /etc/ssl/certs without cert obj yet, check filename tokens
+    if any(pub_token in name_lower for pub_token in KNOWN_PUBLIC_CA_TOKENS):
+        return True
+
+    return False
 
 
 def parse_endpoint_targets(raw_input: str) -> List[str]:

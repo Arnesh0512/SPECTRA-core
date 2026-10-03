@@ -289,6 +289,11 @@ def scan(
         "-e",
         help="Target remote domain endpoints (comma-separated, supports multi-port syntax like domain:443,8443).",
     ),
+    include_system_certs: Optional[bool] = typer.Option(
+        None,
+        "--include-system-certs/--skip-system-certs",
+        help="Include preinstalled OS root CA trust store (/etc/ssl/certs). Default is False (skipped).",
+    ),
 ) -> None:
     """Run an interactive TUI wizard to configure and execute a multi-domain cryptographic scan."""
     _render_hero_banner()
@@ -428,12 +433,14 @@ def scan(
         scan_source = True
         scan_deps = True
         scan_certs = True
+        scan_system_certs = False if include_system_certs is None else include_system_certs
         scan_docker = True
         scan_binaries = True
         scan_runtime_artifacts = False
         enable_artifacts = True
         scan_terraform = True
         scan_cloud_hsm = True
+        enable_infra = True
         endpoints = []
         if endpoints_opt or ports or target_container:
             enable_network = True
@@ -494,6 +501,15 @@ def scan(
 
         console.print("\n  [bold underline yellow]Domain 2: Cryptographic Artifacts & Binaries[/bold underline yellow]")
         scan_certs = Confirm.ask("    [bright_white]• Scan X.509 Certificates & Private Keys (.pem, .crt, .key)[/bright_white]", default=True)
+        scan_system_certs = False
+        if scan_certs:
+            if include_system_certs is not None:
+                scan_system_certs = include_system_certs
+            else:
+                scan_system_certs = Confirm.ask(
+                    "      [dim]↳ Include preinstalled OS root CA trust store (/etc/ssl/certs)?[/dim]",
+                    default=False,
+                )
         scan_docker = Confirm.ask("    [bright_white]• Scan Docker container files (Dockerfile, Compose)[/bright_white]", default=True)
         scan_binaries = Confirm.ask("    [bright_white]• Scan Binary executables & shared libraries (.so, .dll, ELF)[/bright_white]", default=True)
         scan_runtime_artifacts = Confirm.ask("    [bright_white]• Scan Active process memory & dynamic runtime packages[/bright_white]", default=False)
@@ -610,6 +626,7 @@ def scan(
             "Source Code AST": scan_source,
             "Package Dependencies": scan_deps,
             "X.509 Certs & Keys": scan_certs,
+            "OS Root CA Store": scan_system_certs if scan_certs else False,
             "Containers / Docker": scan_docker,
             "Binaries & DLLs": scan_binaries,
             "Process Runtime": scan_runtime_artifacts,
@@ -635,6 +652,8 @@ def scan(
             enable_infrastructure=enable_infra,
             enable_network=enable_network,
             scan_dependencies=scan_deps,
+            scan_certificates=scan_certs,
+            include_system_certs=scan_system_certs,
         ),
         source_scanner=SourceScannerConfig(
             use_ripgrep=True,
@@ -692,6 +711,7 @@ def scan(
         "dependency": "bright_yellow",
         "certifcate": "bright_green",
         "certificate": "bright_green",
+        "system ca": "dim cyan",
         "binary": "bright_magenta",
         "container": "bright_blue",
         "terraform": "bright_magenta",
@@ -1083,7 +1103,12 @@ def _print_findings_summary(correlated_assets: list) -> None:
             algo_badge = f"[bold yellow]{algo_str}[/bold yellow]"
 
         issues_count = len(asset.security_findings)
-        issues_str = f"[bold red]● {issues_count} Issue[/bold red]" if issues_count > 0 else "[bold green]✔ Clean[/bold green]"
+        if asset.raw_metadata.get("is_system_ca"):
+            issues_str = "[dim cyan]✔ System CA[/dim cyan]"
+        elif issues_count > 0:
+            issues_str = f"[bold red]● {issues_count} Issue[/bold red]"
+        else:
+            issues_str = "[bold green]✔ Clean[/bold green]"
 
         table.add_row(
             domain_tag,

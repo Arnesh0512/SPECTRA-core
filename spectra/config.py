@@ -24,6 +24,8 @@ class ScannerToggles(BaseModel):
     enable_infrastructure: bool = Field(default=True, description="Scan AWS/Azure KMS/ACM/HSM and Terraform")
     enable_network: bool = Field(default=True, description="Scan endpoints, TLS handshakes, and web servers")
     scan_dependencies: bool = Field(default=True, description="Scan dependency manifests")
+    scan_certificates: bool = Field(default=True, description="Scan X.509 certificates and keys")
+    include_system_certs: bool = Field(default=False, description="Scan preinstalled OS root CA trust store")
 
 
 class SourceScannerConfig(BaseModel):

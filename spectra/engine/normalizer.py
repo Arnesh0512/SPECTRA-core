@@ -349,17 +349,24 @@ class AssetNormalizer:
         file_path = finding.get("file_path", "")
         lower_path = file_path.lower()
 
-        if artifact_type == "x509_certificate":
+        if artifact_type in ["x509_certificate", "system_root_ca"]:
+            is_sys = finding.get("is_system_ca", False) or artifact_type == "system_root_ca"
             algo = finding.get("public_key_algorithm", "RSA")
             key_size = finding.get("key_size")
-            name = f"Certificate ({finding.get('subject', 'unnamed')})"
-            asset_id = self._generate_id("cert", file_path, str(finding.get("serial_number", "")))
+            subj = finding.get("subject", "unnamed")
+            name = f"OS Root CA ({subj})" if is_sys else f"Certificate ({subj})"
+            asset_type = "certificate"
+            asset_prefix = "sys_ca" if is_sys else "cert"
+            asset_id = self._generate_id(asset_prefix, file_path, str(finding.get("serial_number", "")))
             qs = finding.get("quantum_safe", False)
             nist_status = self.resolve_nist_status(algo, "signature", key_size, qs)
+            meta = finding.get("raw_metadata", {}).copy()
+            meta["is_system_ca"] = is_sys
+            meta["scope"] = "system_trust_store" if is_sys else "application"
             return NormalizedCryptoAsset(
                 asset_id=asset_id,
                 name=name,
-                asset_type="certificate",
+                asset_type=asset_type,
                 source_domain="artifacts",
                 location=file_path,
                 algorithm=algo,
@@ -369,7 +376,7 @@ class AssetNormalizer:
                 shor_vulnerable=True,
                 nist_status=nist_status,
                 security_findings=finding.get("security_findings", []),
-                raw_metadata=finding.get("raw_metadata", {}),
+                raw_metadata=meta,
             )
         elif artifact_type == "compiled_binary":
             algos = finding.get("detected_algorithms", [])

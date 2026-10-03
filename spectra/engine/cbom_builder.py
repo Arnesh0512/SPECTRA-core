@@ -179,7 +179,7 @@ class CBOMBuilder:
             {"name": "crypto:isUpstreamDependency", "value": str(asset.is_upstream_dependency).lower()},
         ]
 
-        # Ingest scanner context (language, operation) without emitting literal 'None'
+        # Ingest scanner context (language, operation, system CA status) without emitting literal 'None'
         if hasattr(asset, "raw_metadata") and isinstance(asset.raw_metadata, dict):
             lang = asset.raw_metadata.get("language")
             if lang and str(lang).lower() != "none":
@@ -187,6 +187,12 @@ class CBOMBuilder:
             op = asset.raw_metadata.get("operation")
             if op and str(op).lower() != "none":
                 crypto_prop["properties"].append({"name": "crypto:operation", "value": str(op)})
+            is_sys = asset.raw_metadata.get("is_system_ca")
+            if is_sys is not None:
+                crypto_prop["properties"].append({"name": "crypto:isSystemCA", "value": str(is_sys).lower()})
+            scope = asset.raw_metadata.get("scope")
+            if scope:
+                crypto_prop["properties"].append({"name": "crypto:credentialScope", "value": str(scope)})
 
         if hasattr(asset, "policy_violations") and asset.policy_violations:
             for viol in asset.policy_violations:

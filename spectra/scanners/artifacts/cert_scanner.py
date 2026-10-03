@@ -7,6 +7,7 @@ and Shor quantum vulnerability.
 Loaded via rules/artifact_patterns.yaml.
 """
 
+import warnings
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,12 +18,19 @@ from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.asymmetric import dsa, ec, ed25519, ed448, rsa, x25519, x448
 
+try:
+    from cryptography.utils import CryptographyDeprecationWarning
+    warnings.filterwarnings("ignore", category=CryptographyDeprecationWarning)
+except ImportError:
+    pass
+
 
 @dataclass
 class CertFinding:
     """Represents a discovered certificate or key artifact."""
     source_domain: str = "artifacts"
     artifact_type: str = "x509_certificate"
+    is_system_ca: bool = False
     file_path: str = ""
     subject: str = ""
     issuer: str = ""
@@ -42,6 +50,7 @@ class CertFinding:
         return {
             "source_domain": self.source_domain,
             "artifact_type": self.artifact_type,
+            "is_system_ca": self.is_system_ca,
             "file_path": self.file_path,
             "subject": self.subject,
             "issuer": self.issuer,
@@ -85,14 +94,15 @@ class CertScanner:
         self,
         target_dir: Path,
         excluded_dirs: Optional[List[str]] = None,
+        include_system_certs: bool = False,
         progress_callback: Optional[Callable] = None,
     ) -> List[CertFinding]:
         findings: List[CertFinding] = []
         excluded = set(excluded_dirs or [])
 
-        from spectra.utils.system_paths import get_certificate_system_paths
+        from spectra.utils.system_paths import get_certificate_system_paths, is_preinstalled_system_ca
         search_dirs: List[Path] = [target_dir] if target_dir and target_dir.exists() else []
-        for sys_path in get_certificate_system_paths(target_dir):
+        for sys_path in get_certificate_system_paths(target_dir, include_system_certs=include_system_certs):
             if sys_path not in search_dirs and not any(part in excluded for part in sys_path.parts):
                 search_dirs.append(sys_path)
 
@@ -114,6 +124,21 @@ class CertScanner:
                         suffix = p.suffix.lower()
                         name = p.name.lower()
                         if suffix in self.cert_extensions or name in self.special_filenames:
+                            # Skip default system openssl.cnf when outside target perimeter
+                            if name == "openssl.cnf":
+                                in_target = False
+                                if target_dir:
+                                    try:
+                                        t_str = str(target_dir.resolve() if not str(target_dir).startswith("/proc/") else target_dir).replace("\\", "/")
+                                        p_str = str(p.resolve() if not str(p).startswith("/proc/") else p).replace("\\", "/")
+                                        in_target = p_str.startswith(t_str.rstrip("/") + "/")
+                                    except Exception:
+                                        pass
+                                if not in_target:
+                                    continue
+                            # If system certs are disabled, fast-bypass known system bundles and symlinks
+                            if not include_system_certs and is_preinstalled_system_ca(p, target_dir=target_dir):
+                                continue
                             seen_files.add(p_key)
                             matching_files.append(p)
             except Exception:
@@ -121,9 +146,13 @@ class CertScanner:
 
         total_certs = len(matching_files)
         for idx, path in enumerate(matching_files, start=1):
+            is_sys_cand = is_preinstalled_system_ca(path, target_dir=target_dir)
+            item_type = "system ca" if is_sys_cand else "certificate"
+            label = "OS Root CA" if is_sys_cand else "Certificate"
+
             if progress_callback and total_certs > 0:
                 pct = 45.0 + (idx / total_certs) * 7.0
-                desc = f"Domain 2/4: Auditing Certificate ({idx}/{total_certs}) {path.name}"
+                desc = f"Domain 2/4: Auditing {label} ({idx}/{total_certs}) {path.name}"
                 try:
                     rel_loc = str(path.relative_to(target_dir)).replace("\\", "/")
                 except Exception:
@@ -133,18 +162,23 @@ class CertScanner:
                     pct,
                     item_info={
                         "seq": f"{idx}/{total_certs}",
-                        "type": "certifcate",
+                        "type": item_type,
                         "filename": path.name,
                         "location": rel_loc,
                     }
                 )
-            finding = self.scan_file(path)
+            finding = self.scan_file(path, target_dir=target_dir, include_system_certs=include_system_certs)
             if finding:
                 findings.append(finding)
 
         return findings
 
-    def scan_file(self, file_path: Path) -> Optional[CertFinding]:
+    def scan_file(
+        self,
+        file_path: Path,
+        target_dir: Optional[Path] = None,
+        include_system_certs: bool = False,
+    ) -> Optional[CertFinding]:
         try:
             with open(file_path, "rb") as f:
                 data = f.read()
@@ -152,11 +186,11 @@ class CertScanner:
             # Attempt X.509 Certificate parsing
             try:
                 cert = x509.load_pem_x509_certificate(data, default_backend())
-                return self._parse_x509_cert(file_path, cert)
+                return self._parse_x509_cert(file_path, cert, target_dir=target_dir, include_system_certs=include_system_certs)
             except Exception:
                 try:
                     cert = x509.load_der_x509_certificate(data, default_backend())
-                    return self._parse_x509_cert(file_path, cert)
+                    return self._parse_x509_cert(file_path, cert, target_dir=target_dir, include_system_certs=include_system_certs)
                 except Exception:
                     pass
 
@@ -165,7 +199,18 @@ class CertScanner:
         except Exception:
             return None
 
-    def _parse_x509_cert(self, file_path: Path, cert: x509.Certificate) -> CertFinding:
+    def _parse_x509_cert(
+        self,
+        file_path: Path,
+        cert: x509.Certificate,
+        target_dir: Optional[Path] = None,
+        include_system_certs: bool = False,
+    ) -> Optional[CertFinding]:
+        from spectra.utils.system_paths import is_preinstalled_system_ca
+        is_sys_ca = is_preinstalled_system_ca(file_path, target_dir=target_dir, cert=cert)
+        if is_sys_ca and not include_system_certs:
+            return None
+
         sec_findings = []
         now = datetime.now(timezone.utc)
 
@@ -207,9 +252,17 @@ class CertScanner:
                 "severity": "HIGH"
             })
 
+        artifact_type = "system_root_ca" if is_sys_ca else "x509_certificate"
+        if is_sys_ca:
+            sec_findings.append({
+                "issue": "Preinstalled OS vendor root CA (/etc/ssl/certs)",
+                "severity": "LOW"
+            })
+
         return CertFinding(
             source_domain="artifacts",
-            artifact_type="x509_certificate",
+            artifact_type=artifact_type,
+            is_system_ca=is_sys_ca,
             file_path=str(file_path.resolve()),
             subject=subject_str,
             issuer=issuer_str,
@@ -223,7 +276,11 @@ class CertScanner:
             quantum_safe=not shor_vuln,
             shor_vulnerable=shor_vuln,
             security_findings=sec_findings,
-            raw_metadata={"version": cert.version.name}
+            raw_metadata={
+                "version": cert.version.name,
+                "is_system_ca": is_sys_ca,
+                "scope": "system_trust_store" if is_sys_ca else "application",
+            }
         )
 
     def _parse_non_cert_artifact(self, file_path: Path, data: bytes) -> CertFinding:
@@ -234,6 +291,7 @@ class CertScanner:
         return CertFinding(
             source_domain="artifacts",
             artifact_type=artifact_type,
+            is_system_ca=False,
             file_path=str(file_path.resolve()),
             subject=file_path.name,
             issuer="Local Artifact",
@@ -247,7 +305,7 @@ class CertScanner:
                 "issue": f"Discovered cryptographic artifact file ({file_path.name})",
                 "severity": "MEDIUM"
             }],
-            raw_metadata={"artifact_category": artifact_type}
+            raw_metadata={"artifact_category": artifact_type, "is_system_ca": False, "scope": "application"}
         )
 
     def _inspect_public_key(self, pub_key: Any) -> tuple[str, Optional[int], bool]:
