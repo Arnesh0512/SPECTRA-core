@@ -85,34 +85,10 @@ class NginxScanner:
         except Exception:
             return {}
 
-    def _get_system_fallback_paths(self) -> List[Path]:
-        """Returns OS-agnostic common default web server configuration directories."""
-        paths: List[Path] = []
-        system = platform.system()
-
-        if system == "Windows":
-            windows_defaults = [
-                Path("C:/nginx/conf"),
-                Path("C:/etc/nginx"),
-                Path("C:/Program Files/nginx/conf"),
-            ]
-            for p in windows_defaults:
-                if p.exists():
-                    paths.append(p)
-        else:
-            # Linux, macOS, Unix-like systems
-            unix_defaults = [
-                Path("/etc/nginx"),
-                Path("/usr/local/etc/nginx"),
-                Path("/opt/nginx/conf"),
-                Path("/etc/httpd/conf"),
-                Path("/etc/apache2"),
-            ]
-            for p in unix_defaults:
-                if p.exists():
-                    paths.append(p)
-
-        return paths
+    def _get_system_fallback_paths(self, target_dir: Optional[Path] = None) -> List[Path]:
+        """Returns OS-agnostic common default web server configuration directories across mounts."""
+        from spectra.utils.system_paths import get_webserver_config_paths
+        return get_webserver_config_paths(target_dir)
 
     def scan_directory(
         self,
@@ -123,11 +99,11 @@ class NginxScanner:
         findings: List[NginxFinding] = []
         excluded = set(excluded_dirs or [])
 
-        # Gather target directory and valid system fallbacks
+        # Gather target directory and discovered root/mounted web server configuration paths
         search_directories = [target_dir] if target_dir and target_dir.exists() else []
-        for fallback in self._get_system_fallback_paths():
-            if fallback not in search_directories:
-                search_directories.append(fallback)
+        for path in self._get_system_fallback_paths(target_dir):
+            if path not in search_directories:
+                search_directories.append(path)
 
         config_files: List[Path] = []
         for directory in search_directories:

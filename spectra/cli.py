@@ -278,6 +278,17 @@ def scan(
         "-y",
         help="Non-interactive mode: accept all defaults automatically.",
     ),
+    ports: Optional[str] = typer.Option(
+        None,
+        "--ports",
+        help="Target port(s) for localhost or container to scan (comma-separated, e.g. 443, 8443).",
+    ),
+    endpoints_opt: Optional[str] = typer.Option(
+        None,
+        "--endpoints",
+        "-e",
+        help="Target remote domain endpoints (comma-separated, supports multi-port syntax like domain:443,8443).",
+    ),
 ) -> None:
     """Run an interactive TUI wizard to configure and execute a multi-domain cryptographic scan."""
     _render_hero_banner()
@@ -423,9 +434,35 @@ def scan(
         enable_artifacts = True
         scan_terraform = True
         scan_cloud_hsm = True
-        enable_infra = True
-        enable_network = False
         endpoints = []
+        if endpoints_opt or ports or target_container:
+            enable_network = True
+            from spectra.utils.system_paths import parse_endpoint_targets
+            if target_container:
+                c_net = docker_client.get_container_network_ports(target_container)
+                c_ip = c_net.get("ip")
+                exposed = c_net.get("exposed_ports", [])
+                bindings = c_net.get("port_bindings", {})
+                target_ports = [int(p.strip()) for p in ports.split(",") if p.strip().isdigit()] if ports else [p for p in exposed if p in [443, 8443, 8080, 8444, 9443, 4443]] or [443, 8443]
+                for p_int in target_ports:
+                    if c_ip:
+                        endpoints.append(f"{c_ip}:{p_int}")
+                    if p_int in bindings:
+                        for hp in bindings[p_int]:
+                            endpoints.append(f"localhost:{hp}")
+                    elif not c_ip:
+                        endpoints.append(f"localhost:{p_int}")
+            elif ports:
+                for p_str in ports.split(","):
+                    if p_str.strip().isdigit():
+                        endpoints.append(f"localhost:{int(p_str.strip())}")
+            if endpoints_opt:
+                endpoints.extend(parse_endpoint_targets(endpoints_opt))
+            # Deduplicate
+            seen_eps = set()
+            endpoints = [e for e in endpoints if not (e in seen_eps or seen_eps.add(e))]
+        else:
+            enable_network = False
     else:
         _render_step_card(
             2, 4,
@@ -468,15 +505,100 @@ def scan(
         enable_infra = scan_terraform or scan_cloud_hsm
 
         console.print("\n  [bold underline blue]Domain 4: Network Protocols & TLS Perimeter[/bold underline blue]")
-        enable_network = Confirm.ask("    [bright_white]• Scan live remote TLS endpoints & web servers?[/bright_white]", default=True)
+        enable_network = Confirm.ask("    [bright_white]• Scan live network TLS endpoints & web servers?[/bright_white]", default=True)
         endpoints = []
         if enable_network:
-            endpoints_input = Prompt.ask(
-                "      [dim]↳ Enter domain endpoints (comma-separated, e.g., example.com:443)[/dim]",
-                default="",
-            )
-            endpoints = [e.strip() for e in endpoints_input.split(",") if e.strip()]
-            console.print(f"      [bold green]✔ Registered {len(endpoints)} endpoint(s).[/bold green]")
+            from spectra.utils.system_paths import parse_endpoint_targets
+
+            # 4.1 Localhost / Container Port Configuration (Prompted before remote endpoints)
+            console.print("  [bold cyan]4.1 Localhost & Container Port Discovery[/bold cyan]")
+            if target_container:
+                c_net = docker_client.get_container_network_ports(target_container)
+                c_ip = c_net.get("ip")
+                exposed = c_net.get("exposed_ports", [])
+                bindings = c_net.get("port_bindings", {})
+
+                if c_ip:
+                    console.print(f"      [bold cyan]• Target Container:[/bold cyan] [bold bright_white]{target_container}[/bold bright_white] ([bold bright_green]{c_ip}[/bold bright_green])")
+                else:
+                    console.print(f"      [bold cyan]• Target Container:[/bold cyan] [bold bright_white]{target_container}[/bold bright_white]")
+                if exposed:
+                    console.print(f"      [dim]• Detected Exposed Port(s): {', '.join(map(str, exposed))}[/dim]")
+                if bindings:
+                    bound_desc = [f"localhost:{hp} -> {cp}" for cp, hps in bindings.items() for hp in hps]
+                    console.print(f"      [dim]• Host-Mapped Port(s): {', '.join(bound_desc)}[/dim]")
+
+                detected_tls = [str(p) for p in exposed if p in [443, 8443, 8080, 8444, 9443, 4443]]
+                default_ports_str = ", ".join(detected_tls) if detected_tls else "443, 8443"
+
+                if yes and ports is None:
+                    target_ports_input = default_ports_str
+                elif ports is not None:
+                    target_ports_input = ports
+                else:
+                    target_ports_input = Prompt.ask(
+                        f"      [dim]↳ Enter port(s) to scan for container '{target_container}' (comma-separated, e.g., 443, 8443)[/dim]",
+                        default=default_ports_str,
+                    )
+
+                for p_str in target_ports_input.split(","):
+                    p_clean = p_str.strip()
+                    if p_clean.isdigit():
+                        p_int = int(p_clean)
+                        if c_ip:
+                            endpoints.append(f"{c_ip}:{p_int}")
+                        if p_int in bindings:
+                            for hp in bindings[p_int]:
+                                endpoints.append(f"localhost:{hp}")
+                        elif not c_ip:
+                            endpoints.append(f"localhost:{p_int}")
+            else:
+                # Host / Local machine mode
+                if yes and ports is None:
+                    target_ports_input = "443, 8443"
+                elif ports is not None:
+                    target_ports_input = ports
+                else:
+                    target_ports_input = Prompt.ask(
+                        "      [dim]↳ Enter port(s) to scan on localhost (comma-separated, e.g., 443, 8443, or empty to skip)[/dim]",
+                        default="443, 8443",
+                    )
+
+                for p_str in target_ports_input.split(","):
+                    p_clean = p_str.strip()
+                    if p_clean.isdigit():
+                        endpoints.append(f"localhost:{int(p_clean)}")
+
+            if endpoints:
+                console.print(f"      [bold green]✔ Registered local/container target(s):[/bold green] [dim]{', '.join(endpoints)}[/dim]\n")
+
+            # 4.2 Remote Domain Endpoints (supports multi-port: domain:443,8443 or domain:443/8443)
+            console.print("  [bold cyan]4.2 Remote Domain Endpoints[/bold cyan]")
+            console.print("      [dim]Tip: You can specify multiple ports (e.g. 'domain:443,8443' or 'domain:443, 8443')[/dim]")
+            if yes and endpoints_opt is None:
+                endpoints_input = ""
+            elif endpoints_opt is not None:
+                endpoints_input = endpoints_opt
+            else:
+                endpoints_input = Prompt.ask(
+                    "      [dim]↳ Enter remote domain endpoints (comma-separated, e.g., example.com:443)[/dim]",
+                    default="",
+                )
+
+            if endpoints_input.strip():
+                domain_endpoints = parse_endpoint_targets(endpoints_input)
+                endpoints.extend(domain_endpoints)
+
+            # Deduplicate endpoints preserving order
+            seen_eps = set()
+            deduped_eps = []
+            for ep in endpoints:
+                if ep not in seen_eps:
+                    seen_eps.add(ep)
+                    deduped_eps.append(ep)
+            endpoints = deduped_eps
+
+            console.print(f"      [bold green]✔ Total network targets registered: {len(endpoints)} endpoint(s).[/bold green]")
 
     # --- Pre-Flight Summary Manifest ---
     preflight_data = {

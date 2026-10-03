@@ -132,10 +132,15 @@ class NetworkReconScanner:
         result = []
         try:
             import paramiko
-            transport = paramiko.Transport((hostname, port))
-            transport.connect(timeout=timeout)
+            sock = socket.create_connection((hostname, port), timeout=timeout)
+            transport = paramiko.Transport(sock)
+            transport.start_client(timeout=timeout)
             server_key = transport.get_remote_server_key()
             transport.close()
+            try:
+                sock.close()
+            except Exception:
+                pass
 
             if server_key:
                 key_algo = server_key.get_name()

@@ -75,6 +75,58 @@ class DockerContainerClient:
             raise RuntimeError(f"Docker API error ({status}): {data.decode('utf-8', errors='replace')}")
         return json.loads(data.decode("utf-8"))
 
+    def get_container_ip(self, container_id_or_name: str) -> Optional[str]:
+        """Extract primary IP address of the container."""
+        try:
+            info = self.get_container_info(container_id_or_name)
+            net_settings = info.get("NetworkSettings", {})
+            ip = net_settings.get("IPAddress")
+            if ip and ip.strip():
+                return ip.strip()
+            networks = net_settings.get("Networks", {})
+            for net_name, net_data in networks.items():
+                net_ip = net_data.get("IPAddress")
+                if net_ip and net_ip.strip():
+                    return net_ip.strip()
+        except Exception:
+            pass
+        return None
+
+    def get_container_network_ports(self, container_id_or_name: str) -> Dict[str, Any]:
+        """Extract exposed ports and host port bindings."""
+        result = {
+            "ip": None,
+            "exposed_ports": [],
+            "port_bindings": {},  # container_port -> list of host_ports
+        }
+        try:
+            info = self.get_container_info(container_id_or_name)
+            result["ip"] = self.get_container_ip(container_id_or_name)
+            exposed = info.get("Config", {}).get("ExposedPorts", {}) or {}
+            for ep_key in exposed.keys():
+                port_str = ep_key.split("/")[0]
+                if port_str.isdigit():
+                    result["exposed_ports"].append(int(port_str))
+            
+            bindings = info.get("HostConfig", {}).get("PortBindings", {}) or {}
+            if not bindings:
+                bindings = info.get("NetworkSettings", {}).get("Ports", {}) or {}
+            
+            for cp_key, host_list in bindings.items():
+                cp_str = cp_key.split("/")[0]
+                if cp_str.isdigit() and host_list:
+                    cp_int = int(cp_str)
+                    host_ports = []
+                    for h in host_list:
+                        hp = h.get("HostPort")
+                        if hp and str(hp).isdigit():
+                            host_ports.append(int(hp))
+                    if host_ports:
+                        result["port_bindings"][cp_int] = host_ports
+        except Exception:
+            pass
+        return result
+
     def extract_container_path(
         self,
         container_id_or_name: str,
@@ -172,13 +224,13 @@ class DockerContainerClient:
             container_id_or_name, target_subpath, dest_dir=staging_root, reset_dest=False
         )
 
-        # Also extract container's user home /root for credentials if container_path is not / or /root
+        # Also extract container's user home /root for credentials and system configs if container_path is not / or /root
         clean_path = target_subpath.rstrip("/")
         if clean_path not in ("", "/", "/root"):
-            for cred_path in ["/root", "/home"]:
+            for sys_path in ["/root", "/home", "/etc/ssl", "/etc/nginx"]:
                 try:
                     self.extract_container_path(
-                        container_id_or_name, cred_path, dest_dir=staging_root, reset_dest=False
+                        container_id_or_name, sys_path, dest_dir=staging_root, reset_dest=False
                     )
                 except Exception:
                     pass

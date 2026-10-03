@@ -90,22 +90,34 @@ class CertScanner:
         findings: List[CertFinding] = []
         excluded = set(excluded_dirs or [])
 
+        from spectra.utils.system_paths import get_certificate_system_paths
+        search_dirs: List[Path] = [target_dir] if target_dir and target_dir.exists() else []
+        for sys_path in get_certificate_system_paths(target_dir):
+            if sys_path not in search_dirs and not any(part in excluded for part in sys_path.parts):
+                search_dirs.append(sys_path)
+
         matching_files: List[Path] = []
+        seen_files: Set[str] = set()
         import os
-        try:
-            for root, dirs, files in os.walk(str(target_dir)):
-                dirs[:] = [
-                    d for d in dirs
-                    if d not in excluded and not any(part in excluded for part in Path(root, d).parts)
-                ]
-                for file_name in files:
-                    p = Path(root) / file_name
-                    suffix = p.suffix.lower()
-                    name = p.name.lower()
-                    if suffix in self.cert_extensions or name in self.special_filenames:
-                        matching_files.append(p)
-        except Exception:
-            pass
+        for sdir in search_dirs:
+            try:
+                for root, dirs, files in os.walk(str(sdir)):
+                    dirs[:] = [
+                        d for d in dirs
+                        if d not in excluded and not any(part in excluded for part in Path(root, d).parts)
+                    ]
+                    for file_name in files:
+                        p = Path(root) / file_name
+                        p_key = str(p.resolve() if not str(p).startswith("/proc/") else p)
+                        if p_key in seen_files:
+                            continue
+                        suffix = p.suffix.lower()
+                        name = p.name.lower()
+                        if suffix in self.cert_extensions or name in self.special_filenames:
+                            seen_files.add(p_key)
+                            matching_files.append(p)
+            except Exception:
+                pass
 
         total_certs = len(matching_files)
         for idx, path in enumerate(matching_files, start=1):
