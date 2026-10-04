@@ -434,11 +434,12 @@ def scan(
         scan_deps = True
         scan_certs = True
         scan_system_certs = False if include_system_certs is None else include_system_certs
-        scan_docker = True
         scan_binaries = True
+        scan_hardware = True
         scan_runtime_artifacts = False
         enable_artifacts = True
         scan_terraform = True
+        scan_docker = True
         scan_cloud_hsm = True
         enable_infra = True
         endpoints = []
@@ -501,8 +502,9 @@ def scan(
 
         console.print("\n  [bold underline magenta]Domain 2: Infrastructure & Cloud Key Management[/bold underline magenta]")
         scan_terraform = Confirm.ask("    [bright_white]• Scan Terraform / IaC configurations (.tf, CloudFormation)[/bright_white]", default=True)
+        scan_docker = Confirm.ask("    [bright_white]• Scan Docker container files (Dockerfile, Compose)[/bright_white]", default=True)
         scan_cloud_hsm = Confirm.ask("    [bright_white]• Scan Cloud KMS / HSM configurations (AWS/Azure/GCP)[/bright_white]", default=True)
-        enable_infra = scan_terraform or scan_cloud_hsm
+        enable_infra = scan_terraform or scan_docker or scan_cloud_hsm
 
         console.print("\n  [bold underline blue]Domain 3: Network Protocols & TLS Perimeter[/bold underline blue]")
         enable_network = Confirm.ask("    [bright_white]• Scan live network TLS endpoints & web servers?[/bright_white]", default=True)
@@ -620,10 +622,10 @@ def scan(
                     f"      [dim]↳ Include preinstalled OS root CA trust store ({trust_label})?[/dim]",
                     default=False,
                 )
-        scan_docker = Confirm.ask("    [bright_white]• Scan Docker container files (Dockerfile, Compose)[/bright_white]", default=True)
         scan_binaries = Confirm.ask("    [bright_white]• Scan Binary executables & shared libraries (.so, .dll, ELF)[/bright_white]", default=True)
+        scan_hardware = Confirm.ask("    [bright_white]• Scan Hardware cryptographic devices (TPM, HSM, CPU instruction sets)[/bright_white]", default=True)
         scan_runtime_artifacts = Confirm.ask("    [bright_white]• Scan Active process memory & dynamic runtime packages[/bright_white]", default=False)
-        enable_artifacts = scan_certs or scan_docker or scan_binaries or scan_runtime_artifacts
+        enable_artifacts = scan_certs or scan_binaries or scan_hardware or scan_runtime_artifacts
 
     # --- Pre-Flight Summary Manifest ---
     preflight_data = {
@@ -634,14 +636,15 @@ def scan(
         "modules": {
             "Source Code AST": scan_source,
             "Package Dependencies": scan_deps,
-            "X.509 Certs & Keys": scan_certs,
-            "OS Root CA Store": scan_system_certs if scan_certs else False,
-            "Containers / Docker": scan_docker,
-            "Binaries & DLLs": scan_binaries,
-            "Process Runtime": scan_runtime_artifacts,
             "Terraform & IaC": scan_terraform,
+            "Containers / Docker": scan_docker,
             "Cloud KMS / HSM": scan_cloud_hsm,
             "Remote TLS Network": enable_network,
+            "X.509 Certs & Keys": scan_certs,
+            "OS Root CA Store": scan_system_certs if scan_certs else False,
+            "Binaries & DLLs": scan_binaries,
+            "Hardware (TPM/HSM)": scan_hardware,
+            "Process Runtime": scan_runtime_artifacts,
         },
     }
     _render_preflight_dashboard(preflight_data)
@@ -663,6 +666,10 @@ def scan(
             scan_dependencies=scan_deps,
             scan_certificates=scan_certs,
             include_system_certs=scan_system_certs,
+            scan_docker=scan_docker,
+            scan_hardware=scan_hardware,
+            scan_binaries=scan_binaries,
+            scan_terraform=scan_terraform,
         ),
         source_scanner=SourceScannerConfig(
             use_ripgrep=True,
@@ -725,10 +732,12 @@ def scan(
         "terra-cert": "bright_green",
         "iac-cert": "bright_green",
         "k8s-cert": "bright_green",
+        "docker-cert": "bright_green",
         "system ca": "dim cyan",
         "binary": "bright_magenta",
         "container": "bright_blue",
         "dockerfile": "bright_blue",
+        "docker": "bright_blue",
         "terraform": "bright_magenta",
         "cloud": "bright_cyan",
         "aws": "bright_cyan",

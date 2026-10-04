@@ -410,6 +410,26 @@ class AssetNormalizer:
                 security_findings=finding.get("security_findings", []),
                 raw_metadata=finding.get("raw_metadata", {}),
             )
+        elif artifact_type in ["hardware", "tpm", "hsm", "cpu_accelerator"] or finding.get("infra_provider") == "hardware":
+            algo = finding.get("algorithm", "hardware_crypto")
+            name = finding.get("device_name") or f"Hardware Asset ({algo})"
+            asset_id = self._generate_id("hw", file_path or name, algo)
+            qs = finding.get("quantum_safe", False)
+            nist_status = self.resolve_nist_status(algo, "hardware", None, qs)
+            return NormalizedCryptoAsset(
+                asset_id=asset_id,
+                name=name,
+                asset_type="hardware",
+                source_domain="artifacts",
+                location=file_path or name,
+                algorithm=algo,
+                primitive="hardware",
+                quantum_safe=qs,
+                shor_vulnerable=finding.get("shor_vulnerable", not qs),
+                nist_status=nist_status,
+                security_findings=finding.get("security_findings", []),
+                raw_metadata=finding.get("raw_metadata", {}),
+            )
         
         # Intelligent fallback for private keys and key stores based on filename/path clues
         algo = finding.get("algorithm", "")
@@ -454,9 +474,16 @@ class AssetNormalizer:
         asset_id = self._generate_id("infra", arn, algo)
         qs = finding.get("quantum_safe", False)
         nist_status = self.resolve_nist_status(algo, "key_management", key_size, qs)
+        if provider == "docker":
+            name = f"Dockerfile ({finding.get('resource_name') or Path(arn).name})"
+        elif provider == "hardware":
+            name = finding.get("device_name") or f"Hardware Asset ({algo})"
+        else:
+            name = f"Infrastructure Asset ({provider})"
+
         return NormalizedCryptoAsset(
             asset_id=asset_id,
-            name=f"Infrastructure Asset ({provider})",
+            name=name,
             asset_type="key",
             source_domain="infrastructure",
             location=arn,

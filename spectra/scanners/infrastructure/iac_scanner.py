@@ -174,9 +174,22 @@ class IaCScanner:
                 elif "AWSTemplateFormatVersion" in doc or "Resources" in doc:
                     findings.extend(self._evaluate_cloudformation_doc(file_path, doc))
 
-            if findings and cert_matches:
+            if cert_matches:
                 for f in findings:
                     f.raw_metadata.setdefault("referenced_cert_paths", []).extend(cert_matches)
+                if not findings:
+                    mtype = self._detect_manifest_type(file_path)
+                    prov = "kubernetes" if mtype == "kubernetes" else ("cloudformation" if mtype == "cloudformation" else "iac")
+                    findings.append(IaCFinding(
+                        source_domain="infrastructure",
+                        infra_provider=prov,
+                        file_path=str(file_path.resolve()),
+                        line_number=1,
+                        resource_kind="manifest_cert_reference",
+                        resource_name=file_path.stem,
+                        algorithm="X509-Certificate-Ref",
+                        raw_metadata={"referenced_cert_paths": cert_matches}
+                    ))
         except Exception:
             return []
         return findings
@@ -197,9 +210,22 @@ class IaCScanner:
                 if "AWSTemplateFormatVersion" in data or "Resources" in data:
                     findings.extend(self._evaluate_cloudformation_doc(file_path, data))
 
-            if findings and cert_matches:
+            if cert_matches:
                 for f in findings:
                     f.raw_metadata.setdefault("referenced_cert_paths", []).extend(cert_matches)
+                if not findings:
+                    mtype = self._detect_manifest_type(file_path)
+                    prov = "cloudformation" if mtype == "cloudformation" else ("azure" if mtype == "azure" else "iac")
+                    findings.append(IaCFinding(
+                        source_domain="infrastructure",
+                        infra_provider=prov,
+                        file_path=str(file_path.resolve()),
+                        line_number=1,
+                        resource_kind="manifest_cert_reference",
+                        resource_name=file_path.stem,
+                        algorithm="X509-Certificate-Ref",
+                        raw_metadata={"referenced_cert_paths": cert_matches}
+                    ))
         except Exception:
             return []
         return findings

@@ -1,11 +1,14 @@
 """
-spectra.scanners.artifacts.container_scanner
-=================================================
-Container image and Dockerfile cryptographic scanner.
-Inspecting container build definitions via rules/container_patterns.yaml.
+spectra.scanners.infrastructure.docker_scanner
+==============================================
+Static container manifest and Dockerfile scanner for infrastructure domain.
+Audits Dockerfiles, Containerfiles, and build manifests for embedded credentials,
+insecure TLS environment configurations, and referenced certificate/key assets.
+Loaded via rules/docker_patterns.yaml.
 """
 
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
 import re
 from typing import Any, Callable, Dict, List, Optional
@@ -13,12 +16,14 @@ import yaml
 
 
 @dataclass
-class ContainerFinding:
-    """Represents cryptographic evidence discovered within container manifests or Dockerfiles."""
-    source_domain: str = "artifacts"
-    artifact_type: str = "container_definition"
+class DockerFinding:
+    """Represents cryptographic evidence discovered within Dockerfiles or container definitions."""
+    source_domain: str = "infrastructure"
+    infra_provider: str = "docker"
     file_path: str = ""
-    line_number: int = 0
+    line_number: int = 1
+    resource_kind: str = "dockerfile"
+    resource_name: str = ""
     finding_category: str = "embedded_crypto"
     details: str = ""
     algorithm: str = "unknown"
@@ -30,9 +35,11 @@ class ContainerFinding:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "source_domain": self.source_domain,
-            "artifact_type": self.artifact_type,
+            "infra_provider": self.infra_provider,
             "file_path": self.file_path,
             "line_number": self.line_number,
+            "resource_kind": self.resource_kind,
+            "resource_name": self.resource_name,
             "finding_category": self.finding_category,
             "details": self.details,
             "algorithm": self.algorithm,
@@ -43,26 +50,25 @@ class ContainerFinding:
         }
 
 
-class ContainerScanner:
-    """Discovers and evaluates cryptographic material embedded within container assets using rules/container_patterns.yaml."""
+class DockerScanner:
+    """Discovers and audits Dockerfiles and container build recipes within the Infrastructure domain."""
 
     def __init__(self, rules_file: Optional[Path] = None):
         if rules_file is None:
-            rules_file = Path(__file__).parent / "rules" / "container_patterns.yaml"
+            rules_file = Path(__file__).parent / "rules" / "docker_patterns.yaml"
         self.rules = self._load_rules(rules_file)
-        
+
         self.dockerfile_names = set(self.rules.get("dockerfile_names", ["dockerfile", "containerfile"]))
         self.dockerfile_extensions = set(self.rules.get("dockerfile_extensions", [".dockerfile", ".containerfile"]))
 
-        # Compile regex patterns from rules
-        key_pats = self.rules.get("embedded_key_patterns", [r"----[-]?BEGIN\s+(?:RSA\s+|EC\s+)?PRIVATE\s+KEY----[-]?"])
+        key_pats = self.rules.get("embedded_key_patterns", [r"----[-]?BEGIN\s+(?:RSA\s+|EC\s+|DSA\s+|OPENSSH\s+)?PRIVATE\s+KEY----[-]?"])
         self.embedded_key_regex = re.compile("|".join(key_pats), re.MULTILINE)
 
-        copy_pats = self.rules.get("copy_key_patterns", [r"^\s*(?:COPY|ADD)\s+.*\.(?:key|pem|p12|pfx|pkcs12)\b"])
-        self.copy_key_regex = re.compile("|".join(copy_pats), re.IGNORECASE | re.MULTILINE)
+        copy_pats = self.rules.get("copy_key_patterns", [r"^\s*(?:COPY|ADD)\s+.*?\.(?:key|pem|p12|pfx|pkcs12|crt|cer)\b"])
+        self.copy_key_regex = re.compile("|".join(copy_pats), re.MULTILINE | re.IGNORECASE)
 
-        env_pats = self.rules.get("env_crypto_patterns", [r"^\s*ENV\s+(?P<var>SSL_CIPHER_SUITES|OPENSSL_CONF|NODE_OPTIONS|TLS_MIN_VERSION)\s*=?\s*(?P<val>[^\n]+)"])
-        self.env_crypto_regex = re.compile("|".join(env_pats), re.IGNORECASE | re.MULTILINE)
+        env_pat = self.rules.get("env_crypto_patterns", [r"^\s*ENV\s+(?P<var>SSL_CIPHER_SUITES|OPENSSL_CONF|NODE_OPTIONS|TLS_MIN_VERSION)\s*=?\s*(?P<val>[^\n]+)"])
+        self.env_crypto_regex = re.compile("|".join(env_pat) if isinstance(env_pat, list) else env_pat, re.MULTILINE)
 
     def _load_rules(self, path: Path) -> Dict[str, Any]:
         if not path.is_file():
@@ -78,12 +84,11 @@ class ContainerScanner:
         target_dir: Path,
         excluded_dirs: Optional[List[str]] = None,
         progress_callback: Optional[Callable] = None,
-    ) -> List[ContainerFinding]:
-        findings: List[ContainerFinding] = []
+    ) -> List[DockerFinding]:
+        findings: List[DockerFinding] = []
         excluded = set(excluded_dirs or [])
 
-        container_files: List[Path] = []
-        import os
+        docker_files: List[Path] = []
         try:
             for root, dirs, files in os.walk(str(target_dir)):
                 dirs[:] = [
@@ -93,15 +98,15 @@ class ContainerScanner:
                 for file_name in files:
                     p = Path(root) / file_name
                     if p.name.lower() in self.dockerfile_names or p.suffix.lower() in self.dockerfile_extensions:
-                        container_files.append(p)
+                        docker_files.append(p)
         except Exception:
             pass
 
-        total_cnt = len(container_files)
-        for idx, path in enumerate(container_files, start=1):
+        total_cnt = len(docker_files)
+        for idx, path in enumerate(docker_files, start=1):
             if progress_callback and total_cnt > 0:
-                pct = 92.0 + (idx / total_cnt) * 4.0
-                desc = f"Domain 4/4: Auditing Dockerfile ({idx}/{total_cnt}) {path.name}"
+                pct = 42.0 + (idx / total_cnt) * 3.0
+                desc = f"Domain 2/4: Auditing Dockerfile ({idx}/{total_cnt}) {path.name}"
                 from spectra.utils.system_paths import format_display_path
                 rel_loc = format_display_path(path, target_dir)
                 progress_callback(
@@ -118,26 +123,35 @@ class ContainerScanner:
 
         return findings
 
-    def scan_file(self, file_path: Path, target_dir: Optional[Path] = None) -> List[ContainerFinding]:
+    def scan_file(self, file_path: Path, target_dir: Optional[Path] = None) -> List[DockerFinding]:
         try:
             with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                 content = f.read()
         except Exception:
             return []
 
-        findings: List[ContainerFinding] = []
+        findings: List[DockerFinding] = []
 
         from spectra.utils.system_paths import format_display_path
         clean_file_path = format_display_path(file_path, target_dir)
 
+        # Harvest all referenced certificate and key file paths in the Dockerfile
+        cert_matches = re.findall(
+            r'["\']?([^"\'\s\n\(\)]+\.(?:crt|pem|cer|key|p12|jks))["\']?',
+            content,
+            re.IGNORECASE
+        )
+
         # 1. Inspect for embedded private key blocks
         for match in self.embedded_key_regex.finditer(content):
             line_no = content[:match.start()].count("\n") + 1
-            findings.append(ContainerFinding(
-                source_domain="artifacts",
-                artifact_type="container_definition",
+            findings.append(DockerFinding(
+                source_domain="infrastructure",
+                infra_provider="docker",
                 file_path=clean_file_path,
                 line_number=line_no,
+                resource_kind="dockerfile",
+                resource_name=file_path.name,
                 finding_category="embedded_crypto",
                 details="Hardcoded private key block detected directly inside Dockerfile",
                 algorithm="RSA/ECC",
@@ -154,11 +168,13 @@ class ContainerScanner:
         for match in self.copy_key_regex.finditer(content):
             line_no = content[:match.start()].count("\n") + 1
             matched_line = match.group(0).strip()
-            findings.append(ContainerFinding(
-                source_domain="artifacts",
-                artifact_type="container_definition",
+            findings.append(DockerFinding(
+                source_domain="infrastructure",
+                infra_provider="docker",
                 file_path=clean_file_path,
                 line_number=line_no,
+                resource_kind="dockerfile",
+                resource_name=file_path.name,
                 finding_category="copied_key",
                 details=f"Copying private key artifact into image: '{matched_line}'",
                 algorithm="Private-Key",
@@ -184,18 +200,59 @@ class ContainerScanner:
                     "severity": "HIGH"
                 })
 
-            findings.append(ContainerFinding(
-                source_domain="artifacts",
-                artifact_type="container_definition",
+            findings.append(DockerFinding(
+                source_domain="infrastructure",
+                infra_provider="docker",
                 file_path=clean_file_path,
                 line_number=line_no,
+                resource_kind="dockerfile",
+                resource_name=file_path.name,
                 finding_category="env_crypto",
-                details=f"Cryptographic environment variable set: {var_name}={var_val}",
-                algorithm="Configuration",
+                details=f"Dockerfile environment crypto directive: {var_name}={var_val}",
+                algorithm=var_val if len(var_val) < 20 else "Custom-TLS-Env",
                 quantum_safe=False,
-                shor_vulnerable=False,
+                shor_vulnerable=True,
                 security_findings=sec_findings,
-                raw_metadata={"env_var": var_name, "env_val": var_val, "host_path": str(file_path)}
+                raw_metadata={"variable": var_name, "value": var_val, "host_path": str(file_path)}
+            ))
+
+        # 4. Attach referenced certificates to findings or register the Dockerfile itself
+        if cert_matches:
+            for f in findings:
+                f.raw_metadata.setdefault("referenced_cert_paths", []).extend(cert_matches)
+
+            if not findings:
+                findings.append(DockerFinding(
+                    source_domain="infrastructure",
+                    infra_provider="docker",
+                    file_path=clean_file_path,
+                    line_number=1,
+                    resource_kind="dockerfile",
+                    resource_name=file_path.name,
+                    finding_category="container_definition",
+                    details=f"Dockerfile declares cryptographic asset references ({len(cert_matches)} found)",
+                    algorithm="Dockerfile-Environment",
+                    quantum_safe=False,
+                    shor_vulnerable=True,
+                    security_findings=[],
+                    raw_metadata={"referenced_cert_paths": cert_matches, "host_path": str(file_path)}
+                ))
+        elif not findings:
+            # Baseline entry for clean Dockerfile
+            findings.append(DockerFinding(
+                source_domain="infrastructure",
+                infra_provider="docker",
+                file_path=clean_file_path,
+                line_number=1,
+                resource_kind="dockerfile",
+                resource_name=file_path.name,
+                finding_category="container_definition",
+                details="Standard container image definition",
+                algorithm="Standard-Container",
+                quantum_safe=False,
+                shor_vulnerable=True,
+                security_findings=[],
+                raw_metadata={"host_path": str(file_path)}
             ))
 
         return findings

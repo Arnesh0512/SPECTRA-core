@@ -1,0 +1,19 @@
+schema_version: "1.0"
+description: "Dockerfile and container build cryptographic scan patterns for Infrastructure Domain."
+
+dockerfile_names:
+  - "dockerfile"
+  - "containerfile"
+
+dockerfile_extensions:
+  - ".dockerfile"
+  - ".containerfile"
+
+embedded_key_patterns:
+  - "----[-]?BEGIN\\s+(?:RSA\\s+|EC\\s+|DSA\\s+|OPENSSH\\s+)?PRIVATE\\s+KEY----[-]?"
+
+copy_key_patterns:
+  - "^\\s*(?:COPY|ADD)\\s+.*\\.(?:key|pem|p12|pfx|pkcs12|crt|cer)\\b"
+
+env_crypto_patterns:
+  - "^\\s*ENV\\s+(?P<var>SSL_CIPHER_SUITES|OPENSSL_CONF|NODE_OPTIONS|TLS_MIN_VERSION)\\s*=?\\s*(?P<val>[^\\n]+)"

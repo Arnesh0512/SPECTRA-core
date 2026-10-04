@@ -183,7 +183,9 @@ class CertScanner:
                 tokens = [
                     "terra" if t == "terraform" else (
                         "k8s" if t == "kubernetes" else (
-                            "iac" if t in ("iac_manifest", "cloudformation") else t
+                            "docker" if t in ("docker", "dockerfile") else (
+                                "iac" if t in ("iac_manifest", "cloudformation", "iac") else t
+                            )
                         )
                     )
                     for t in cfg_source.split(",")

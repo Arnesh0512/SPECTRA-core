@@ -15,20 +15,20 @@ from spectra.utils.credential_locator import get_credential_locator
 
 from .aws_scanner import AWSFinding, AWSScanner
 from .azure_scanner import AzureFinding, AzureScanner
+from .docker_scanner import DockerFinding, DockerScanner
 from .gcp_scanner import GCPFinding, GCPScanner
-from .hardware_scanner import HardwareFinding, HardwareScanner
 from .iac_scanner import IaCFinding, IaCScanner
 from .terraform_scanner import TerraformFinding, TerraformScanner
 
 
 class InfrastructureScanOrchestrator:
-    """Dispatches scanners across Terraform files, IaC manifests, hardware modules, AWS, Azure, and GCP cloud environments."""
+    """Dispatches scanners across Terraform files, IaC manifests, Dockerfiles, AWS, Azure, and GCP cloud environments."""
 
     def __init__(self, config: ScanConfig):
         self.config = config
         self.terraform_scanner = TerraformScanner()
         self.iac_scanner = IaCScanner()
-        self.hardware_scanner = HardwareScanner()
+        self.docker_scanner = DockerScanner()
 
         # Safely extract AWS regions from config if present, otherwise default to us-east-1
         aws_cfg = getattr(config, "aws", None)
@@ -95,7 +95,8 @@ class InfrastructureScanOrchestrator:
         excluded = self.config.source_scanner.excluded_directories
 
         # 1. Scan Terraform IaC Configurations (.tf files)
-        if target_dir and target_dir.exists():
+        scan_tf_enabled = getattr(self.config.scanners, "scan_terraform", True)
+        if target_dir and target_dir.exists() and scan_tf_enabled:
             if progress_callback:
                 progress_callback("Domain 2/4: Auditing Terraform Configurations (.tf)...", 30.0)
             log_step(f"Scanning Terraform configurations in: {target_dir}")
@@ -109,9 +110,9 @@ class InfrastructureScanOrchestrator:
                 all_findings.append(f.to_dict())
 
         # 2. Scan Generic IaC Manifests (Kubernetes YAML, CloudFormation JSON/YAML)
-        if target_dir and target_dir.exists():
+        if target_dir and target_dir.exists() and scan_tf_enabled:
             if progress_callback:
-                progress_callback("Domain 2/4: Auditing Generic IaC Manifests (K8s, CFN)...", 40.0)
+                progress_callback("Domain 2/4: Auditing Generic IaC Manifests (K8s, CFN)...", 38.0)
             log_step(f"Scanning generic IaC manifests in: {target_dir}")
             iac_findings: List[IaCFinding] = self.iac_scanner.scan_directory(
                 target_dir=target_dir,
@@ -122,31 +123,20 @@ class InfrastructureScanOrchestrator:
             for f in iac_findings:
                 all_findings.append(f.to_dict())
 
-        # 3. Scan Host Hardware (TPMs, PKCS#11 HSMs, CPU Crypto Acceleration)
-        if progress_callback:
-            progress_callback("Domain 2/4: Auditing Host TPM & CPU Acceleration...", 45.0)
-        log_step("Scanning host cryptographic hardware (TPM, HSM, CPU instruction sets)")
-        hw_findings: List[HardwareFinding] = self.hardware_scanner.scan(target_dir=target_dir)
-        log_info(f"Discovered {len(hw_findings)} hardware cryptographic device(s)/capability.")
-        total_hw = len(hw_findings)
-        for idx, f in enumerate(hw_findings, 1):
-            all_findings.append(f.to_dict())
-            if progress_callback and total_hw > 0:
-                feat = f.raw_metadata.get("features", [])
-                feat_str = f"[{', '.join(feat).upper()}] " if feat else ""
-                loc = f.raw_metadata.get("sysfs_path") or f.raw_metadata.get("dev_path") or f.raw_metadata.get("module_path") or f.raw_metadata.get("platform") or f.algorithm
-                if feat_str:
-                    loc = f"{feat_str}{loc}"
-                progress_callback(
-                    f"Domain 2/4: Host Crypto Hardware ({idx}/{total_hw}) {f.device_name}",
-                    45.0 + (idx / total_hw) * 2.0,
-                    item_info={
-                        "seq": f"{idx}/{total_hw}",
-                        "type": "hardware",
-                        "filename": f.device_name,
-                        "location": loc,
-                    }
-                )
+        # 3. Scan Dockerfiles and Container Build Manifests
+        scan_docker_enabled = getattr(self.config.scanners, "scan_docker", True)
+        if target_dir and target_dir.exists() and scan_docker_enabled:
+            if progress_callback:
+                progress_callback("Domain 2/4: Auditing Dockerfiles & Container Definitions...", 44.0)
+            log_step(f"Scanning Dockerfiles and container manifests in: {target_dir}")
+            docker_findings: List[DockerFinding] = self.docker_scanner.scan_directory(
+                target_dir=target_dir,
+                excluded_dirs=excluded,
+                progress_callback=progress_callback,
+            )
+            log_info(f"Discovered {len(docker_findings)} container cryptographic finding(s).")
+            for f in docker_findings:
+                all_findings.append(f.to_dict())
 
         # 4. Scan AWS Cloud Resources (KMS CMKs, ACM Certificates if enabled)
         aws_cfg = getattr(self.config, "aws", None)

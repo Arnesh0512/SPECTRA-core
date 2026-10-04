@@ -19,13 +19,17 @@ class ScanTargets(BaseModel):
 
 class ScannerToggles(BaseModel):
     enable_source: bool = Field(default=True, description="Scan source code AST and patterns")
-    enable_artifacts: bool = Field(default=True, description="Scan binaries, certs, and containers")
+    enable_artifacts: bool = Field(default=True, description="Scan binaries, certs, and hardware")
     enable_runtime: bool = Field(default=True, description="Scan active local runtime packages and processes")
-    enable_infrastructure: bool = Field(default=True, description="Scan AWS/Azure KMS/ACM/HSM and Terraform")
+    enable_infrastructure: bool = Field(default=True, description="Scan AWS/Azure KMS/ACM and Terraform/Docker")
     enable_network: bool = Field(default=True, description="Scan endpoints, TLS handshakes, and web servers")
     scan_dependencies: bool = Field(default=True, description="Scan dependency manifests")
     scan_certificates: bool = Field(default=True, description="Scan X.509 certificates and keys")
     include_system_certs: bool = Field(default=False, description="Scan preinstalled OS root CA trust store")
+    scan_docker: bool = Field(default=True, description="Scan Dockerfiles and container manifests")
+    scan_hardware: bool = Field(default=True, description="Scan host cryptographic hardware (TPM, HSM, CPU)")
+    scan_binaries: bool = Field(default=True, description="Scan binary executables and shared libraries")
+    scan_terraform: bool = Field(default=True, description="Scan Terraform and IaC configurations")
 
 
 class SourceScannerConfig(BaseModel):

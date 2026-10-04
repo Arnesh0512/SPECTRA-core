@@ -1,9 +1,10 @@
 """
-spectra.scanners.infrastructure.hardware_scanner
-=====================================================
+spectra.scanners.artifacts.hardware_scanner
+===========================================
 Discovers and audits hardware-level cryptographic assets and accelerators
-cross-platform (Linux, Windows, macOS).
-Loaded via rules/infra_patterns.yaml.
+cross-platform (Linux, Windows, macOS): TPM chips, PKCS#11 HSM libraries,
+and CPU hardware cryptographic acceleration flags.
+Loaded via rules/hardware_patterns.yaml.
 """
 
 from dataclasses import dataclass, field
@@ -18,7 +19,8 @@ import yaml
 @dataclass
 class HardwareFinding:
     """Represents a discovered hardware cryptographic device or capability."""
-    source_domain: str = "infrastructure"
+    source_domain: str = "artifacts"
+    artifact_type: str = "hardware"
     infra_provider: str = "hardware"
     file_path: str = ""
     device_type: str = "unknown"
@@ -33,6 +35,7 @@ class HardwareFinding:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "source_domain": self.source_domain,
+            "artifact_type": self.artifact_type,
             "infra_provider": self.infra_provider,
             "file_path": self.file_path or self.device_name,
             "device_type": self.device_type,
@@ -47,14 +50,18 @@ class HardwareFinding:
 
 
 class HardwareScanner:
-    """Probes host environment for hardware security modules across Linux, Windows, and macOS[cite: 35]."""
+    """Probes host environment for hardware security modules across Linux, Windows, and macOS."""
 
     def __init__(self, rules_file: Optional[Path] = None):
         if rules_file is None:
-            rules_file = Path(__file__).parent / "rules" / "infra_patterns.yaml"
+            rules_file = Path(__file__).parent / "rules" / "hardware_patterns.yaml"
+            if not rules_file.exists():
+                rules_file = Path(__file__).parent.parent / "infrastructure" / "rules" / "infra_patterns.yaml"
         self.rules = self._load_rules(rules_file)
         self.pkcs11_libs = self.rules.get("pkcs11_libraries", [
             "/usr/lib/softhsm/libsofthsm2.so",
+            "/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so",
+            "/usr/local/lib/softhsm/libsofthsm2.so",
             "/opt/cloudhsm/lib/libcloudhsm_pkcs11.so",
             "C:\\Program Files\\SoftHSM2\\lib\\softhsm2.dll"
         ])
@@ -70,7 +77,7 @@ class HardwareScanner:
             return {}
 
     def scan(self, target_dir: Optional[Path] = None) -> List[HardwareFinding]:
-        """Runs cross-platform hardware audit checks across TPM, HSM libraries, and CPU crypto instructions[cite: 35]."""
+        """Runs cross-platform hardware audit checks across TPM, HSM libraries, and CPU crypto instructions."""
         findings: List[HardwareFinding] = []
         findings.extend(self._scan_tpm(target_dir))
         findings.extend(self._scan_pkcs11_hsms(target_dir))
@@ -81,7 +88,7 @@ class HardwareScanner:
         findings: List[HardwareFinding] = []
         system = platform.system()
 
-        # 1. Linux TPM check[cite: 35]
+        # 1. Linux TPM check
         if system == "Linux":
             tpm_class_paths = [Path("/sys/class/tpm")]
             if target_dir:
@@ -138,7 +145,7 @@ class HardwareScanner:
                         ))
                         break
 
-        # 2. Windows TPM check via PowerShell[cite: 35]
+        # 2. Windows TPM check via PowerShell
         elif system == "Windows":
             try:
                 cmd = ["powershell", "-Command", "Get-Tpm | Select-Object TpmPresent, TpmReady"]
@@ -197,7 +204,7 @@ class HardwareScanner:
         cpu_features: List[str] = []
         system = platform.system()
 
-        # 1. Linux CPU info check[cite: 35]
+        # 1. Linux CPU info check
         cpuinfo_paths = [Path("/proc/cpuinfo")]
         if target_dir:
             cpuinfo_paths.append(target_dir / "proc/cpuinfo")
@@ -217,13 +224,13 @@ class HardwareScanner:
                 except Exception:
                     pass
 
-        # 2. Windows CPU info check[cite: 35]
+        # 2. Windows CPU info check
         if not cpu_features and system == "Windows":
             processor_arch = platform.machine()
             if processor_arch in ["AMD64", "x86_64", "ARM64"]:
                 cpu_features.extend(["aes", "sha2"])
 
-        # 3. macOS CPU info check[cite: 35]
+        # 3. macOS CPU info check
         elif not cpu_features and system == "Darwin":
             try:
                 result = subprocess.run(["sysctl", "-n", "machdep.cpu.features"], capture_output=True, text=True, timeout=3)

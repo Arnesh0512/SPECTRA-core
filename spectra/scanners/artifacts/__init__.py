@@ -14,18 +14,18 @@ from spectra.utils.logger import log_info, log_step
 
 from .binary_scanner import BinaryFinding, BinaryScanner
 from .cert_scanner import CertFinding, CertScanner
-from .container_scanner import ContainerFinding, ContainerScanner
+from .hardware_scanner import HardwareFinding, HardwareScanner
 from .runtime_scanner import RuntimeFinding, RuntimeScanner
 
 
 class ArtifactScanOrchestrator:
-    """Dispatches artifact and runtime scanners across target environments."""
+    """Dispatches artifact, hardware, and runtime scanners across target environments."""
 
     def __init__(self, config: ScanConfig):
         self.config = config
         self.cert_scanner = CertScanner()
         self.binary_scanner = BinaryScanner()
-        self.container_scanner = ContainerScanner()
+        self.hardware_scanner = HardwareScanner()
         self.runtime_scanner = RuntimeScanner()
 
     def scan(
@@ -34,7 +34,7 @@ class ArtifactScanOrchestrator:
         progress_callback: Optional[Callable[[str, float], None]] = None,
         config_discovered_certs: Optional[Dict[str, str]] = None,
     ) -> List[Dict[str, Any]]:
-        """Scans directory for artifacts, and inspects local runtime environment if enabled."""
+        """Scans directory for artifacts, hardware capabilities, and inspects local runtime environment."""
         log_step(f"Scanning cryptographic artifacts and runtime in: {target_dir}")
         excluded = self.config.source_scanner.excluded_directories
 
@@ -62,20 +62,41 @@ class ArtifactScanOrchestrator:
             log_info("Certificate and key scanning bypassed by configuration.")
 
         # 2. Scan Binaries & Shared Libraries
-        if progress_callback:
-            progress_callback("Domain 4/4: Auditing Executable Binaries & Shared Libraries...", 85.0)
-        binary_findings: List[BinaryFinding] = self.binary_scanner.scan_directory(
-            target_dir, excluded_dirs=excluded, progress_callback=progress_callback
-        )
-        log_info(f"Discovered {len(binary_findings)} binary/library artifact(s) with crypto linkage.")
+        binary_findings: List[BinaryFinding] = []
+        if getattr(self.config.scanners, "scan_binaries", True):
+            if progress_callback:
+                progress_callback("Domain 4/4: Auditing Executable Binaries & Shared Libraries...", 82.0)
+            binary_findings = self.binary_scanner.scan_directory(
+                target_dir, excluded_dirs=excluded, progress_callback=progress_callback
+            )
+            log_info(f"Discovered {len(binary_findings)} binary/library artifact(s) with crypto linkage.")
 
-        # 3. Scan Container Definitions & Dockerfiles
-        if progress_callback:
-            progress_callback("Domain 4/4: Auditing Container Definitions & Dockerfiles...", 92.0)
-        container_findings: List[ContainerFinding] = self.container_scanner.scan_directory(
-            target_dir, excluded_dirs=excluded, progress_callback=progress_callback
-        )
-        log_info(f"Discovered {len(container_findings)} container cryptographic finding(s).")
+        # 3. Scan Host Hardware (TPMs, PKCS#11 HSMs, CPU Crypto Acceleration)
+        hw_findings: List[HardwareFinding] = []
+        if getattr(self.config.scanners, "scan_hardware", True):
+            if progress_callback:
+                progress_callback("Domain 4/4: Auditing Host TPM, HSM & CPU Crypto Hardware...", 90.0)
+            log_step("Scanning host cryptographic hardware (TPM, HSM, CPU instruction sets)")
+            hw_findings = self.hardware_scanner.scan(target_dir=target_dir)
+            log_info(f"Discovered {len(hw_findings)} hardware cryptographic device(s)/capability.")
+            total_hw = len(hw_findings)
+            for idx, f in enumerate(hw_findings, 1):
+                if progress_callback and total_hw > 0:
+                    feat = f.raw_metadata.get("features", [])
+                    feat_str = f"[{', '.join(feat).upper()}] " if feat else ""
+                    loc = f.raw_metadata.get("sysfs_path") or f.raw_metadata.get("dev_path") or f.raw_metadata.get("module_path") or f.raw_metadata.get("platform") or f.algorithm
+                    if feat_str:
+                        loc = f"{feat_str}{loc}"
+                    progress_callback(
+                        f"Domain 4/4: Host Crypto Hardware ({idx}/{total_hw}) {f.device_name}",
+                        90.0 + (idx / total_hw) * 5.0,
+                        item_info={
+                            "seq": f"{idx}/{total_hw}",
+                            "type": "hardware",
+                            "filename": f.device_name,
+                            "location": loc,
+                        }
+                    )
 
         # 4. Scan Active Runtime Environment (Processes, loaded .so files, python packages)
         runtime_findings: List[RuntimeFinding] = []
@@ -90,8 +111,8 @@ class ArtifactScanOrchestrator:
             all_findings.append(c.to_dict())
         for b in binary_findings:
             all_findings.append(b.to_dict())
-        for ct in container_findings:
-            all_findings.append(ct.to_dict())
+        for hw in hw_findings:
+            all_findings.append(hw.to_dict())
         for rt in runtime_findings:
             all_findings.append(rt.to_dict())
 
