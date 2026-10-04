@@ -101,7 +101,7 @@ class ContainerScanner:
         for idx, path in enumerate(container_files, start=1):
             if progress_callback and total_cnt > 0:
                 pct = 92.0 + (idx / total_cnt) * 4.0
-                desc = f"Domain 4/4: Auditing Container ({idx}/{total_cnt}) {path.name}"
+                desc = f"Domain 4/4: Auditing Dockerfile ({idx}/{total_cnt}) {path.name}"
                 from spectra.utils.system_paths import format_display_path
                 rel_loc = format_display_path(path, target_dir)
                 progress_callback(
@@ -109,7 +109,7 @@ class ContainerScanner:
                     pct,
                     item_info={
                         "seq": f"{idx}/{total_cnt}",
-                        "type": "container",
+                        "type": "dockerfile",
                         "filename": path.name,
                         "location": rel_loc,
                     }

@@ -82,13 +82,13 @@ class TerraformScanner:
         findings: List[TerraformFinding] = []
         excluded = set(excluded_dirs or [])
 
+        import os
         tf_files: List[Path] = []
-        for path in target_dir.rglob("*.tf"):
-            if not path.is_file():
-                continue
-            if any(part in excluded for part in path.parts):
-                continue
-            tf_files.append(path)
+        for root, dirs, files in os.walk(target_dir):
+            dirs[:] = [d for d in dirs if d not in excluded and not any(part in excluded for part in Path(root, d).parts)]
+            for file in files:
+                if file.lower().endswith(".tf"):
+                    tf_files.append(Path(root) / file)
 
         total_tf = len(tf_files)
         for idx, path in enumerate(tf_files, start=1):

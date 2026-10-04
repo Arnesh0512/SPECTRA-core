@@ -68,6 +68,46 @@ class IaCScanner:
         except Exception:
             return {}
 
+    def _detect_manifest_type(self, file_path: Path) -> str:
+        """Determines the specific IaC category purely by content/schema inspection without folder path dependence."""
+        name_lower = file_path.name.lower()
+
+        # Filename-based Docker Compose detection
+        if name_lower in ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"]:
+            return "compose"
+
+        # Peek at content to identify schema structure
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                head = f.read(2048)
+            head_lower = head.lower()
+
+            # 1. Kubernetes: apiVersion and kind declarations
+            if ("apiversion:" in head_lower or "apiversion " in head_lower) and ("kind:" in head_lower or "kind " in head_lower):
+                return "kubernetes"
+
+            # 2. CloudFormation: AWSTemplateFormatVersion or AWS Resources block
+            if "awstemplateformatversion" in head_lower or ("resources" in head_lower and "aws::" in head_lower):
+                return "cloudformation"
+
+            # 3. Azure ARM / Bicep template: management.azure.com schema or Microsoft resource types
+            if "schema.management.azure.com" in head_lower or "microsoft.keyvault" in head_lower or "microsoft.security" in head_lower:
+                return "azure"
+
+            # 4. Hardware / Security Module configurations: PKCS#11 or TPM
+            if "pkcs11" in head_lower or "softhsm" in head_lower or "tpm_version" in head_lower or "tpm" in head_lower:
+                return "hardware"
+
+            # 5. Generic Docker Compose if not named docker-compose.yml
+            if "services:" in head_lower and ("image:" in head_lower or "build:" in head_lower):
+                return "compose"
+
+        except Exception:
+            pass
+
+        # Fallback to generic "IaC" type if specific IaC category cannot be determined
+        return "IaC"
+
     def scan_directory(
         self,
         target_dir: Path,
@@ -77,21 +117,21 @@ class IaCScanner:
         findings: List[IaCFinding] = []
         excluded = set(excluded_dirs or [])
 
+        import os
         iac_files: List[Path] = []
-        for path in target_dir.rglob("*"):
-            if not path.is_file():
-                continue
-            if any(part in excluded for part in path.parts):
-                continue
-            ext = path.suffix.lower()
-            if ext in self.YAML_EXTENSIONS or ext in self.JSON_EXTENSIONS:
-                iac_files.append(path)
+        for root, dirs, files in os.walk(target_dir):
+            dirs[:] = [d for d in dirs if d not in excluded and not any(part in excluded for part in Path(root, d).parts)]
+            for file in files:
+                ext = Path(file).suffix.lower()
+                if ext in self.YAML_EXTENSIONS or ext in self.JSON_EXTENSIONS:
+                    iac_files.append(Path(root) / file)
 
         total_iac = len(iac_files)
         for idx, path in enumerate(iac_files, start=1):
+            manifest_type = self._detect_manifest_type(path)
             if progress_callback and total_iac > 0:
                 pct = 40.0 + (idx / total_iac) * 5.0
-                desc = f"Domain 2/4: Auditing IaC ({idx}/{total_iac}) {path.name}"
+                desc = f"Domain 2/4: Auditing [{manifest_type}] ({idx}/{total_iac}) {path.name}"
                 from spectra.utils.system_paths import format_display_path
                 rel_loc = format_display_path(path, target_dir)
                 progress_callback(
@@ -99,7 +139,7 @@ class IaCScanner:
                     pct,
                     item_info={
                         "seq": f"{idx}/{total_iac}",
-                        "type": "cloud",
+                        "type": manifest_type,
                         "filename": path.name,
                         "location": rel_loc,
                     }

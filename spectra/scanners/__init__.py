@@ -294,7 +294,7 @@ class MasterScanner:
                         matched.append(_safe_path(m))
 
             # 6. Fallback search by filename under container root standard ssl dirs
-            if fname and c_root and c_root.exists() and not matched:
+            if fname and c_root and c_root.exists():
                 for sub in ["etc/ssl/certs", "etc/ssl/keys", "usr/local/share/ca-certificates"]:
                     c_ssl = c_root / sub / fname
                     if c_ssl.is_file():

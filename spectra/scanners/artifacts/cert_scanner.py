@@ -179,9 +179,13 @@ class CertScanner:
             is_sys_cand = is_preinstalled_system_ca(path, target_dir=target_dir)
 
             if cfg_source:
-                # Normalize provider tokens to clean short names (e.g. kubernetes -> k8s, iac_manifest -> iac)
+                # Normalize provider tokens to clean short names (e.g. terraform -> terra, kubernetes -> k8s, iac_manifest -> iac)
                 tokens = [
-                    "k8s" if t == "kubernetes" else ("iac" if t == "iac_manifest" else t)
+                    "terra" if t == "terraform" else (
+                        "k8s" if t == "kubernetes" else (
+                            "iac" if t in ("iac_manifest", "cloudformation") else t
+                        )
+                    )
                     for t in cfg_source.split(",")
                 ]
                 clean_source = ",".join(dict.fromkeys(tokens))

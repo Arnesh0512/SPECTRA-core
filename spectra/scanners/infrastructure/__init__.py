@@ -152,7 +152,7 @@ class InfrastructureScanOrchestrator:
                             47.0,
                             item_info={
                                 "seq": f"{idx}/{len(aws_findings)}",
-                                "type": "cloud",
+                                "type": "aws",
                                 "filename": f"AWS KMS: {f.resource_id[:16]}...",
                                 "location": f"{f.region} ({f.algorithm}-{f.key_size or ''})",
                             }
@@ -179,7 +179,7 @@ class InfrastructureScanOrchestrator:
                             48.5,
                             item_info={
                                 "seq": f"{idx}/{len(azure_findings)}",
-                                "type": "cloud",
+                                "type": "azure",
                                 "filename": f"Azure KV: {f.resource_id}",
                                 "location": f"{f.vault_name} ({f.algorithm}-{f.key_size or ''})",
                             }
@@ -206,7 +206,7 @@ class InfrastructureScanOrchestrator:
                             49.5,
                             item_info={
                                 "seq": f"{idx}/{len(gcp_findings)}",
-                                "type": "cloud",
+                                "type": "gcloud",
                                 "filename": f"GCP KMS: {f.resource_id}",
                                 "location": f"{f.key_ring} ({f.algorithm}-{f.key_size or ''})",
                             }
