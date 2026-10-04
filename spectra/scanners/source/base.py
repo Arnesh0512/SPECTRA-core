@@ -138,7 +138,7 @@ class BaseSourceScanner(ABC):
         if len(file_stem) >= 4 and file_stem.lower() not in COMMON_STEMS:
             search_terms.append(file_stem)
 
-        curr_file_str = str(file_path) if str(file_path).startswith("/proc/") else str(file_path.resolve())
+        curr_file_str = str(file_path) if "/proc/" in str(file_path) else str(file_path.resolve())
         visited_files = {curr_file_str}
 
         for term in search_terms:
@@ -151,7 +151,7 @@ class BaseSourceScanner(ABC):
                     parts = line.split(":", 2)
                     if len(parts) >= 2:
                         p_str = parts[0]
-                        matched_file = p_str if p_str.startswith("/proc/") else str(Path(p_str).resolve())
+                        matched_file = p_str if "/proc/" in p_str else str(Path(p_str).resolve())
                         if matched_file not in visited_files:
                             direct_call_files.add(matched_file)
                             visited_files.add(matched_file)

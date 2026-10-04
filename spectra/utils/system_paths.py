@@ -31,7 +31,7 @@ def discover_root_mounts(target_dir: Optional[Path] = None) -> List[Path]:
         if not p:
             return
         try:
-            resolved = p.resolve() if not str(p).startswith("/proc/") else p
+            resolved = p if "/proc/" in str(p) else p.resolve()
             res_str = str(resolved).rstrip("/\\")
             if not res_str:
                 res_str = "/"
@@ -41,11 +41,11 @@ def discover_root_mounts(target_dir: Optional[Path] = None) -> List[Path]:
         except Exception:
             pass
 
-    # 1. Inspect target_dir hierarchy
+    # 1. Inspect target_dir hierarchy and candidate mounted root filesystems
     if target_dir:
         t_str = str(target_dir).replace("\\", "/")
-        # Fast-path container proc mount: /proc/<pid>/root/...
-        proc_match = re.match(r"^(/proc/\d+/root)", t_str)
+        # Fast-path container proc mount: /proc/<pid>/root/... or /scan/proc/<pid>/root/... or /host/proc/<pid>/root/...
+        proc_match = re.match(r"^((?:/(?:scan|host))?/proc/\d+/root)", t_str)
         if proc_match:
             _add_root(Path(proc_match.group(1)))
         
@@ -54,9 +54,26 @@ def discover_root_mounts(target_dir: Optional[Path] = None) -> List[Path]:
         if tmp_match:
             _add_root(Path(tmp_match.group(1)))
 
-        # Direct root anchor
+        # Direct root anchor (e.g., /, C:\)
         if target_dir.anchor:
             _add_root(Path(target_dir.anchor))
+
+        # Inspect target_dir and its parent directories to identify mounted root filesystems
+        # (directories containing system structures like etc, usr, Program Files, Windows, or Library)
+        try:
+            cand_dirs = [target_dir]
+            if "/proc/" not in str(target_dir):
+                cand_dirs.extend(list(target_dir.resolve().parents))
+            else:
+                cand_dirs.extend(list(target_dir.parents))
+            for cand in cand_dirs:
+                if any(
+                    (cand / ind).is_dir()
+                    for ind in ["etc", "usr", "Program Files", "Program Files (x86)", "Windows", "Library", "System"]
+                ):
+                    _add_root(cand)
+        except Exception:
+            pass
 
     # 2. Check Docker container mounts of host filesystem
     for mount_cand in [Path("/scan"), Path("/host"), Path("/target"), Path("/var/run")]:
@@ -72,29 +89,44 @@ def discover_root_mounts(target_dir: Optional[Path] = None) -> List[Path]:
                 if len(parts) >= 5:
                     mp = Path(parts[4])
                     # If mounted directory looks like a root or host volume
-                    if mp.name in ["scan", "host", "target", "mnt", "root"]:
+                    if mp.is_dir() and mp.name in ["scan", "host", "target", "mnt", "root", "media"]:
                         _add_root(mp)
         except Exception:
             pass
 
-    # 4. Check native OS roots
+    # 4. Check native OS roots, mounted drives, and volumes across platforms
     system = platform.system()
     if system == "Windows":
-        # Check all available Windows drive letters
+        # Check all available Windows drive letters (A:\ through Z:\)
         import string
         for letter in string.ascii_uppercase:
             drive_path = Path(f"{letter}:/")
             if drive_path.exists():
                 _add_root(drive_path)
     else:
-        # Linux, macOS, Unix
+        # Linux, macOS, Unix native root
         _add_root(Path("/"))
-        # Check common WSL drive mounts
-        for wsl_drive in [Path("/mnt/c"), Path("/mnt/d"), Path("/mnt/e")]:
-            if wsl_drive.exists():
-                _add_root(wsl_drive)
-        # Check macOS volume roots
-        for mac_vol in [Path("/System/Volumes/Data"), Path("/Volumes")]:
+
+        # Linux/WSL mounted drives (/mnt/*, /media/*, /run/media/*)
+        for mount_parent in [Path("/mnt"), Path("/media"), Path("/run/media")]:
+            if mount_parent.exists() and mount_parent.is_dir():
+                try:
+                    for sub in mount_parent.iterdir():
+                        if sub.is_dir():
+                            _add_root(sub)
+                except Exception:
+                    pass
+
+        # macOS volume roots (/Volumes/*, /System/Volumes/Data, /Library)
+        mac_vols = Path("/Volumes")
+        if mac_vols.exists() and mac_vols.is_dir():
+            try:
+                for sub in mac_vols.iterdir():
+                    if sub.is_dir():
+                        _add_root(sub)
+            except Exception:
+                pass
+        for mac_vol in [Path("/System/Volumes/Data"), Path("/Library")]:
             if mac_vol.exists():
                 _add_root(mac_vol)
 
@@ -112,7 +144,7 @@ def get_webserver_config_paths(target_dir: Optional[Path] = None) -> List[Path]:
     def _add_path(p: Path):
         try:
             if p.exists() and p.is_dir():
-                key = str(p.resolve() if not str(p).startswith("/proc/") else p)
+                key = str(p if "/proc/" in str(p) else p.resolve())
                 if key not in seen:
                     seen.add(key)
                     candidate_paths.append(p)
@@ -154,9 +186,10 @@ def get_certificate_system_paths(
 ) -> List[Path]:
     """
     Returns all existing directories likely to contain system SSL/TLS certificates,
-    private keys, and custom CA trust stores across target_dir and all discovered roots.
+    private keys, and custom CA trust stores across target_dir and all discovered roots
+    (Linux, WSL, Windows, macOS, mounted drives).
     When include_system_certs is False, OS vendor public root CA directories
-    (e.g., usr/share/ca-certificates) are completely excluded.
+    (e.g., usr/share/ca-certificates, System/Library/Keychains) are completely excluded.
     """
     candidate_paths: List[Path] = []
     seen: Set[str] = set()
@@ -164,44 +197,115 @@ def get_certificate_system_paths(
     def _add_path(p: Path):
         try:
             if p.exists() and p.is_dir():
-                key = str(p.resolve() if not str(p).startswith("/proc/") else p)
+                key = str(p if "/proc/" in str(p) else p.resolve())
                 if key not in seen:
                     seen.add(key)
                     candidate_paths.append(p)
         except Exception:
             pass
 
-    # Check target_dir directly
+    # 1. Target directory & its standard internal certificate folders
     if target_dir and target_dir.exists():
         _add_path(target_dir)
-        for sub in ["certificates", "keys", "certs", "ssl"]:
+        for sub in [
+            "certificates", "keys", "certs", "ssl", "tls", "pki",
+            "keystores", "config/ssl", "config/certs", "conf/ssl", "security"
+        ]:
             _add_path(target_dir / sub)
 
-    # Search standard SSL certificate and key locations across all discovered roots
+    # 2. Standard SSL certificate and key locations across all discovered roots
+    # Comprehensive across Linux, WSL, Windows, macOS, and mounted filesystems
     subdirs = [
+        # Linux / WSL / Unix system locations
         "etc/ssl/certs",
         "etc/ssl/keys",
         "etc/ssl/private",
         "etc/ssl",
         "etc/pki/tls/certs",
         "etc/pki/tls/private",
+        "etc/pki/tls",
+        "etc/pki/ca-trust/source/anchors",
         "usr/local/share/ca-certificates",
+        "usr/local/etc/ssl",
+        "usr/local/etc/ssl/certs",
+        "usr/local/etc/openssl",
+        "usr/local/ssl",
         "var/ssl",
-        "Program Files/OpenSSL-Win64",
+        "etc/security/certificates",
+
+        # Windows OpenSSL, Common Files & system SSL locations
         "Program Files/Common Files/SSL",
+        "Program Files/Common Files/SSL/certs",
+        "Program Files/Common Files/SSL/private",
+        "Program Files (x86)/Common Files/SSL",
+        "Program Files (x86)/Common Files/SSL/certs",
+        "Program Files (x86)/Common Files/SSL/private",
+        "Program Files/OpenSSL-Win64",
+        "Program Files/OpenSSL-Win64/bin/PEM",
+        "Program Files/OpenSSL-Win64/certs",
+        "Program Files/OpenSSL-Win64/keys",
+        "Program Files (x86)/OpenSSL-Win32",
+        "Program Files (x86)/OpenSSL-Win32/certs",
+        "Program Files (x86)/OpenSSL-Win32/keys",
+        "ProgramData/ssl",
+        "ProgramData/ssl/certs",
+        "ProgramData/ssl/private",
+        "ProgramData/OpenSSL",
+        "ProgramData/OpenSSL/certs",
+        "ProgramData/certificates",
+        "Windows/System32/drivers/etc/ssl",
+        "OpenSSL-Win64",
+        "OpenSSL-Win64/certs",
+        "OpenSSL-Win32",
+        "tools/openssl",
+
+        # macOS system & Homebrew SSL locations
+        "private/etc/ssl/certs",
+        "private/etc/ssl/keys",
+        "private/etc/ssl",
+        "usr/local/etc/openssl",
+        "usr/local/etc/openssl@3",
+        "usr/local/etc/openssl@1.1",
+        "opt/homebrew/etc/openssl",
+        "opt/homebrew/etc/openssl@3",
+        "opt/homebrew/etc/openssl@1.1",
+        "opt/homebrew/share/ca-certificates",
+        "opt/homebrew/etc/ca-certificates",
+        "Library/Keychains",
+        "Library/Security/Certificates",
     ]
 
     # Only include preinstalled OS vendor trust store repositories if requested
     if include_system_certs:
         subdirs.extend([
+            # Linux OS vendor root CA packages
             "usr/share/ca-certificates",
             "etc/pki/ca-trust",
+            "etc/pki/ca-trust/extracted",
             "etc/ca-certificates",
+            "etc/ca-certificates/extracted",
+
+            # macOS OS vendor root trust store
+            "System/Library/Keychains",
+            "System/Library/OpenSSL/certs",
+
+            # Windows system catalog trust stores
+            "Windows/System32/catroot",
+            "Windows/System32/catroot2",
         ])
 
     for root in discover_root_mounts(target_dir):
         for sub in subdirs:
             _add_path(root / sub)
+
+    # Search user's security directories (.ssh, .ssl) across OSes
+    try:
+        user_home = Path.home()
+        if user_home.exists():
+            for u_sub in [".ssh", ".ssl", "AppData/Roaming/OpenSSL", "AppData/Local/OpenSSL"]:
+                _add_path(user_home / u_sub)
+    except Exception:
+        pass
 
     return candidate_paths
 
@@ -214,9 +318,14 @@ OS_BUNDLE_FILENAMES = {
     "objsign-ca-bundle.pem",
     "java-cacerts.jks",
     "tls-ca-bundle.pem",
+    "cert.pem",
+    "curl-ca-bundle.crt",
+    "authroot.stl",
+    "roots.sst",
 }
 
 KNOWN_PUBLIC_CA_TOKENS = {
+    # Global Public Root CAs
     "digicert", "globalsign", "sectigo", "godaddy", "entrust", "amazon",
     "microsoft", "google trust services", "gts", "isrg root", "let's encrypt",
     "lets encrypt", "baltimore", "verisign", "comodo", "d-trust", "buypass",
@@ -229,7 +338,13 @@ KNOWN_PUBLIC_CA_TOKENS = {
     "xramp", "hellenic academic", "securetrust", "twca", "autoridad de certificacion",
     "firmaprofesional", "uca extended", "uca global", "naver global", "izenpe",
     "epki root", "microsec", "secom", "cfca", "ssl.com", "trustwave", "atos",
-    "certainly", "gdca", "e-szigno", "trustasia", "security communication"
+    "certainly", "gdca", "e-szigno", "trustasia", "security communication",
+    # Apple Root CAs (macOS)
+    "apple root ca", "apple computer", "apple worldwide", "apple public", "apple inc",
+    # Windows / Microsoft Root CAs
+    "microsoft root certificate authority", "microsoft root ca", "microsoft corporation", "windows root",
+    # Linux distribution vendor roots
+    "mozilla root", "canonical", "debian", "red hat",
 }
 
 
@@ -239,8 +354,9 @@ def is_preinstalled_system_ca(
     cert: Optional[Any] = None,
 ) -> bool:
     """
-    Differentiates between preinstalled OS vendor Root CAs (e.g., Mozilla CA store)
-    and user/application-configured certificates and keys.
+    Differentiates between preinstalled OS vendor Root CAs (e.g., Mozilla CA store,
+    Windows Root Store, macOS System Keychain) and user/application-configured certificates and keys.
+    Works universally across Linux/WSL, Windows, macOS, and mounted filesystems.
     """
     p_str = str(file_path).replace("\\", "/")
     p_lower = p_str.lower()
@@ -249,8 +365,8 @@ def is_preinstalled_system_ca(
     # 1. Any artifact within the project target perimeter is ALWAYS user/application
     if target_dir:
         try:
-            t_resolved = str(target_dir.resolve()).replace("\\", "/") if not str(target_dir).startswith("/proc/") else str(target_dir).replace("\\", "/")
-            f_resolved = str(file_path.resolve()).replace("\\", "/") if not str(file_path).startswith("/proc/") else p_str
+            t_resolved = str(target_dir if "/proc/" in str(target_dir) else target_dir.resolve()).replace("\\", "/")
+            f_resolved = str(file_path if "/proc/" in str(file_path) else file_path.resolve()).replace("\\", "/")
             if f_resolved.startswith(t_resolved.rstrip("/") + "/"):
                 return False
         except Exception:
@@ -274,6 +390,7 @@ def is_preinstalled_system_ca(
         return True
 
     # 4. Known OS vendor CA store directories and paths - ALWAYS preinstalled system CA
+    # Covers Linux, macOS, and Windows vendor stores
     if "/mozilla/" in p_lower:
         return True
     if "/usr/share/ca-certificates/" in p_lower and "/usr/local/" not in p_lower:
@@ -283,6 +400,10 @@ def is_preinstalled_system_ca(
         "/pki/ca-trust-source/",
         "/pki/ca-trust/extracted/",
         "/etc/ca-certificates/",
+        "/system/library/keychains/",
+        "/system/library/openssl/",
+        "/windows/system32/catroot/",
+        "/windows/system32/catroot2/",
     ]):
         return True
 
@@ -302,6 +423,7 @@ def is_preinstalled_system_ca(
                 "/usr/share/ca-certificates/",
                 "/ca-certificates/extracted/",
                 "/pki/ca-trust/",
+                "/system/library/keychains/",
                 "ca-certificates.crt",
                 "ca-bundle.crt",
             ]):
@@ -309,18 +431,48 @@ def is_preinstalled_system_ca(
     except Exception:
         pass
 
-    # 6. Check if file is located in another system CA path (e.g. /etc/ssl/certs, /etc/pki/tls/certs)
+    # 6. Check if file is located in a known system CA path across Linux, Windows, macOS, or mounted sysroots
     in_system_ca_path = any(
         sys_token in p_lower for sys_token in [
             "/etc/ssl/certs",
             "/etc/pki/tls/certs",
+            "/private/etc/ssl/certs",
+            "/common files/ssl",
+            "/openssl-win64/certs",
+            "/openssl-win32/certs",
+            "/programdata/openssl",
+            "/programdata/ssl",
+            "/opt/homebrew/share/ca-certificates",
         ]
     )
 
     if not in_system_ca_path:
         return False
 
-    # 7. If inside system CA path, inspect certificate properties if available
+    # In /usr/local/share/ca-certificates or /opt/homebrew/share/ca-certificates: ALWAYS user/admin custom CA
+    if "/usr/local/" in p_lower or "/opt/homebrew/share/" in p_lower:
+        return False
+
+    # In system directories: non-symlink, non-bundle files are typically user/application certs,
+    # UNLESS their subject or issuer explicitly identifies them as a known public vendor CA.
+    if not file_path.is_symlink() and name_lower not in OS_BUNDLE_FILENAMES:
+        if cert:
+            try:
+                subj = cert.subject.rfc4514_string().lower()
+                issuer = cert.issuer.rfc4514_string().lower()
+                if any(pub in subj or pub in issuer for pub in KNOWN_PUBLIC_CA_TOKENS) and not any(
+                    k in subj for k in ["nexis", "ecdat", "internal", "local", "corp", "private", "test", "dev", "custom", "company", "enterprise"]
+                ):
+                    return True
+            except Exception:
+                pass
+        elif any(pub_token in name_lower for pub_token in KNOWN_PUBLIC_CA_TOKENS) and not any(
+            k in name_lower for k in ["nexis", "ecdat", "internal", "local", "corp", "private", "test", "dev", "custom", "company", "enterprise"]
+        ):
+            return True
+        return False
+
+    # 7. For symlinks, bundles, or system store files, inspect certificate properties if available
     if cert:
         from cryptography import x509
         # Check basic constraints
@@ -346,23 +498,44 @@ def is_preinstalled_system_ca(
         # If it is a CA, check if it's a known public CA or custom user CA
         try:
             subj = cert.subject.rfc4514_string().lower()
-            # If "nexis" or project/internal names are in the subject, it's a user CA
-            if any(internal_kw in subj for internal_kw in ["nexis", "internal", "local", "corp", "private", "test", "dev", "myca", "custom"]):
+            if any(internal_kw in subj for internal_kw in ["nexis", "ecdat", "internal", "local", "corp", "private", "test", "dev", "myca", "custom", "company", "enterprise"]):
                 return False
-            # Check subject and issuer
             issuer = cert.issuer.rfc4514_string().lower()
             if any(pub_token in subj or pub_token in issuer or pub_token in name_lower for pub_token in KNOWN_PUBLIC_CA_TOKENS):
                 return True
-            # In /etc/ssl/certs, a CA without internal naming is typically an OS root CA
-            return True
         except Exception:
             pass
 
-    # If it's in /etc/ssl/certs without cert obj yet, check filename tokens
+    # If without cert object yet, check filename tokens
     if any(pub_token in name_lower for pub_token in KNOWN_PUBLIC_CA_TOKENS):
         return True
 
     return False
+
+
+def get_os_trust_store_label(target_dir: Optional[Path] = None) -> str:
+    """
+    Returns an appropriate human-readable description of the OS root CA trust store
+    based on the current operating system, container environment, or target filesystem.
+    """
+    if target_dir:
+        t_str = str(target_dir).replace("\\", "/").lower()
+        if "/proc/" in t_str or "/tmp/spectra_containers/" in t_str:
+            return "/etc/ssl/certs, ca-certificates"
+        if any(w_cand in t_str for w_cand in ["c:/", "d:/", "e:/", "program files", "windows"]):
+            return "Windows Root Store, OpenSSL certs"
+        if any(m_cand in t_str for m_cand in ["/library/", "/system/", "/volumes/"]):
+            return "macOS Keychain, /etc/ssl/certs"
+
+    # Host OS detection
+    sys_name = platform.system()
+    if sys_name == "Windows":
+        return "Windows Root Store, OpenSSL certs"
+    elif sys_name == "Darwin":
+        return "macOS Keychain, /etc/ssl/certs"
+    else:
+        return "/etc/ssl/certs, /etc/pki, ca-certificates"
+
 
 
 def parse_endpoint_targets(raw_input: str) -> List[str]:
@@ -414,3 +587,64 @@ def parse_endpoint_targets(raw_input: str) -> List[str]:
             seen.add(ep)
             deduped.append(ep)
     return deduped
+
+
+def format_display_path(
+    file_path: Any,
+    target_dir: Optional[Any] = None,
+) -> str:
+    """
+    Formats a file path for display in telemetry progress tables, reports, and CBOM.
+    - Preserves container-native paths (e.g., /etc/ssl/..., /opt/nexis/...) by stripping
+      container mount prefixes (/scan/proc/<pid>/root, /proc/<pid>/root, /tmp/spectra_containers/<name>).
+    - If a path is inside target_dir, retains the user-specified target directory prefix
+      (e.g., /opt/nexis/keys/gateway-key.pem instead of keys/gateway-key.pem).
+    """
+    if not file_path:
+        return ""
+
+    p_str = str(file_path).replace("\\", "/")
+
+    container_mount_pattern = re.compile(
+        r"^((?:/(?:scan|host))?/proc/\d+/root|/tmp/spectra_containers/[^/]+)(/.*)?$"
+    )
+    m = container_mount_pattern.match(p_str)
+    if m:
+        sub = m.group(2) or "/"
+        return sub if sub.startswith("/") else f"/{sub}"
+
+    if target_dir:
+        t_str = str(target_dir).replace("\\", "/")
+        m_t = container_mount_pattern.match(t_str)
+        user_c_dir = (m_t.group(2) or "/") if m_t else None
+
+        # If file_path is already a relative subpath (e.g. 'keys/gateway-key.pem')
+        if not p_str.startswith("/") and not (len(p_str) > 1 and p_str[1] == ":"):
+            if user_c_dir:
+                base = user_c_dir.rstrip("/")
+                return f"{base}/{p_str}" if base else f"/{p_str}"
+            else:
+                base = t_str.rstrip("/")
+                if base and base != ".":
+                    return f"{base}/{p_str}"
+                return p_str
+
+        # If file_path is under target_dir on host
+        try:
+            p_obj = Path(p_str)
+            t_obj = Path(t_str)
+            rel = p_obj.relative_to(t_obj)
+            rel_str = str(rel).replace("\\", "/")
+            if user_c_dir:
+                base = user_c_dir.rstrip("/")
+                return f"{base}/{rel_str}" if base else f"/{rel_str}"
+            else:
+                base = t_str.rstrip("/")
+                if base and base != ".":
+                    return f"{base}/{rel_str}"
+                return rel_str
+        except Exception:
+            pass
+
+    return p_str
+

@@ -96,11 +96,15 @@ class DockerContainerClient:
         """Extract exposed ports and host port bindings."""
         result = {
             "ip": None,
+            "status": "unknown",
+            "is_running": False,
             "exposed_ports": [],
             "port_bindings": {},  # container_port -> list of host_ports
         }
         try:
             info = self.get_container_info(container_id_or_name)
+            result["status"] = info.get("State", {}).get("Status", "unknown")
+            result["is_running"] = info.get("State", {}).get("Running", False)
             result["ip"] = self.get_container_ip(container_id_or_name)
             exposed = info.get("Config", {}).get("ExposedPorts", {}) or {}
             for ep_key in exposed.keys():
@@ -199,19 +203,23 @@ class DockerContainerClient:
         if not target_subpath:
             target_subpath = "/"
 
-        # 1. Fast-path: Check if direct host proc filesystem is accessible via --pid=host
+        # 1. Fast-path: Check if direct host proc filesystem is accessible via --pid=host or /scan/proc
         if pid > 0:
-            proc_root_path = Path(f"/proc/{pid}/root")
-            if proc_root_path.exists() and os.access(proc_root_path, os.R_OK):
-                logger.info(f"Direct host proc perimeter active at {proc_root_path} (PID: {pid})")
-                if target_subpath in ("", "/"):
-                    return proc_root_path, info
-                sub_target = Path(f"/proc/{pid}/root/{target_subpath.lstrip('/')}")
-                if sub_target.exists():
-                    return sub_target, info
-                return proc_root_path, info
+            for proc_cand in [
+                Path(f"/proc/{pid}/root"),
+                Path(f"/scan/proc/{pid}/root"),
+                Path(f"/host/proc/{pid}/root"),
+            ]:
+                if proc_cand.exists() and os.access(proc_cand, os.R_OK):
+                    logger.info(f"Direct host proc perimeter active at {proc_cand} (PID: {pid})")
+                    if target_subpath in ("", "/"):
+                        return proc_cand, info
+                    sub_target = proc_cand / target_subpath.lstrip("/")
+                    if sub_target.exists():
+                        return sub_target, info
+                    return proc_cand, info
 
-        # 2. Archive API streaming fallback (when running without --pid=host)
+        # 2. Archive API streaming fallback (when running without direct proc access)
         clean_name = container_id_or_name.replace("/", "_").strip("_")
         staging_root = Path("/tmp/spectra_containers") / clean_name
 
@@ -224,15 +232,16 @@ class DockerContainerClient:
             container_id_or_name, target_subpath, dest_dir=staging_root, reset_dest=False
         )
 
-        # Also extract container's user home /root for credentials and system configs if container_path is not / or /root
-        clean_path = target_subpath.rstrip("/")
-        if clean_path not in ("", "/", "/root"):
-            for sys_path in ["/root", "/home", "/etc/ssl", "/etc/nginx"]:
-                try:
-                    self.extract_container_path(
-                        container_id_or_name, sys_path, dest_dir=staging_root, reset_dest=False
-                    )
-                except Exception:
-                    pass
+        # Also extract container's system configs, certificates, and keys into proper root hierarchy
+        for sys_path in ["/etc/ssl", "/etc/nginx", "/usr/local/share/ca-certificates", "/root", "/home"]:
+            try:
+                rel_path = sys_path.lstrip("/")
+                target_dest = staging_root / rel_path
+                target_dest.parent.mkdir(parents=True, exist_ok=True)
+                self.extract_container_path(
+                    container_id_or_name, sys_path, dest_dir=target_dest.parent, reset_dest=False
+                )
+            except Exception:
+                pass
 
         return extracted_path, info

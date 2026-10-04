@@ -292,7 +292,7 @@ def scan(
     include_system_certs: Optional[bool] = typer.Option(
         None,
         "--include-system-certs/--skip-system-certs",
-        help="Include preinstalled OS root CA trust store (/etc/ssl/certs). Default is False (skipped).",
+        help="Include preinstalled OS root CA trust store (Linux /etc/ssl/certs, Windows Root Store, macOS Keychain). Default is False (skipped).",
     ),
 ) -> None:
     """Run an interactive TUI wizard to configure and execute a multi-domain cryptographic scan."""
@@ -506,8 +506,10 @@ def scan(
             if include_system_certs is not None:
                 scan_system_certs = include_system_certs
             else:
+                from spectra.utils.system_paths import get_os_trust_store_label
+                trust_label = get_os_trust_store_label(target_path)
                 scan_system_certs = Confirm.ask(
-                    "      [dim]↳ Include preinstalled OS root CA trust store (/etc/ssl/certs)?[/dim]",
+                    f"      [dim]↳ Include preinstalled OS root CA trust store ({trust_label})?[/dim]",
                     default=False,
                 )
         scan_docker = Confirm.ask("    [bright_white]• Scan Docker container files (Dockerfile, Compose)[/bright_white]", default=True)
@@ -533,6 +535,13 @@ def scan(
                 c_ip = c_net.get("ip")
                 exposed = c_net.get("exposed_ports", [])
                 bindings = c_net.get("port_bindings", {})
+
+                is_running = c_net.get("is_running", True)
+                status_str = c_net.get("status", "running")
+
+                if not is_running:
+                    console.print(f"      [bold yellow]⚠ Notice:[/bold yellow] Target container '[bold bright_white]{target_container}[/bold bright_white]' is currently [bold red]{status_str}[/bold red].")
+                    console.print(f"      [dim]Run 'docker start {target_container}' to enable direct container IP network auditing.[/dim]")
 
                 if c_ip:
                     console.print(f"      [bold cyan]• Target Container:[/bold cyan] [bold bright_white]{target_container}[/bold bright_white] ([bold bright_green]{c_ip}[/bold bright_green])")
@@ -741,7 +750,9 @@ def scan(
                 seq = str(item_info.get("seq", ""))
                 itype = str(item_info.get("type", ""))
                 filename = str(item_info.get("filename", ""))
-                location = str(item_info.get("location", ""))
+                raw_loc = str(item_info.get("location", ""))
+                from spectra.utils.system_paths import format_display_path
+                location = format_display_path(raw_loc, target_path) if raw_loc else ""
             else:
                 m_dep = re.search(r"Dependency \((\d+/\d+)\) \[([^\]]+)\] (.+)", desc)
                 m_ast = re.search(r"AST Parsing \((\d+/\d+)\) \[([^\]]+)\] (.+)", desc)

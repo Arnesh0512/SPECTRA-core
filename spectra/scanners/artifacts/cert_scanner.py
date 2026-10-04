@@ -118,7 +118,7 @@ class CertScanner:
                     ]
                     for file_name in files:
                         p = Path(root) / file_name
-                        p_key = str(p.resolve() if not str(p).startswith("/proc/") else p)
+                        p_key = str(p.resolve() if "/proc/" not in str(p) else p)
                         if p_key in seen_files:
                             continue
                         suffix = p.suffix.lower()
@@ -129,8 +129,8 @@ class CertScanner:
                                 in_target = False
                                 if target_dir:
                                     try:
-                                        t_str = str(target_dir.resolve() if not str(target_dir).startswith("/proc/") else target_dir).replace("\\", "/")
-                                        p_str = str(p.resolve() if not str(p).startswith("/proc/") else p).replace("\\", "/")
+                                        t_str = str(target_dir if "/proc/" in str(target_dir) else target_dir.resolve()).replace("\\", "/")
+                                        p_str = str(p if "/proc/" in str(p) else p.resolve()).replace("\\", "/")
                                         in_target = p_str.startswith(t_str.rstrip("/") + "/")
                                     except Exception:
                                         pass
@@ -153,10 +153,8 @@ class CertScanner:
             if progress_callback and total_certs > 0:
                 pct = 45.0 + (idx / total_certs) * 7.0
                 desc = f"Domain 2/4: Auditing {label} ({idx}/{total_certs}) {path.name}"
-                try:
-                    rel_loc = str(path.relative_to(target_dir)).replace("\\", "/")
-                except Exception:
-                    rel_loc = str(path).replace("\\", "/")
+                from spectra.utils.system_paths import format_display_path
+                rel_loc = format_display_path(path, target_dir)
                 progress_callback(
                     desc,
                     pct,
@@ -195,7 +193,7 @@ class CertScanner:
                     pass
 
             # Fallback for keys / keystores where X.509 certificate parsing doesn't apply directly
-            return self._parse_non_cert_artifact(file_path, data)
+            return self._parse_non_cert_artifact(file_path, data, target_dir=target_dir)
         except Exception:
             return None
 
@@ -255,15 +253,16 @@ class CertScanner:
         artifact_type = "system_root_ca" if is_sys_ca else "x509_certificate"
         if is_sys_ca:
             sec_findings.append({
-                "issue": "Preinstalled OS vendor root CA (/etc/ssl/certs)",
+                "issue": "Preinstalled OS vendor root CA (system trust store)",
                 "severity": "LOW"
             })
 
+        from spectra.utils.system_paths import format_display_path
         return CertFinding(
             source_domain="artifacts",
             artifact_type=artifact_type,
             is_system_ca=is_sys_ca,
-            file_path=str(file_path.resolve()),
+            file_path=format_display_path(file_path, target_dir),
             subject=subject_str,
             issuer=issuer_str,
             serial_number=hex(cert.serial_number),
@@ -280,11 +279,18 @@ class CertScanner:
                 "version": cert.version.name,
                 "is_system_ca": is_sys_ca,
                 "scope": "system_trust_store" if is_sys_ca else "application",
+                "host_path": str(file_path),
             }
         )
 
-    def _parse_non_cert_artifact(self, file_path: Path, data: bytes) -> CertFinding:
+    def _parse_non_cert_artifact(
+        self,
+        file_path: Path,
+        data: bytes,
+        target_dir: Optional[Path] = None,
+    ) -> CertFinding:
         """Handles private keys, keystores, and CSRs safely without leaking secrets."""
+        from spectra.utils.system_paths import format_display_path
         text = data.decode("utf-8", errors="ignore")
         artifact_type = "private_key" if "PRIVATE KEY" in text or file_path.suffix.lower() == ".key" else "keystore"
         
@@ -292,7 +298,7 @@ class CertScanner:
             source_domain="artifacts",
             artifact_type=artifact_type,
             is_system_ca=False,
-            file_path=str(file_path.resolve()),
+            file_path=format_display_path(file_path, target_dir),
             subject=file_path.name,
             issuer="Local Artifact",
             serial_number="N/A",
@@ -305,7 +311,12 @@ class CertScanner:
                 "issue": f"Discovered cryptographic artifact file ({file_path.name})",
                 "severity": "MEDIUM"
             }],
-            raw_metadata={"artifact_category": artifact_type, "is_system_ca": False, "scope": "application"}
+            raw_metadata={
+                "artifact_category": artifact_type,
+                "is_system_ca": False,
+                "scope": "application",
+                "host_path": str(file_path),
+            }
         )
 
     def _inspect_public_key(self, pub_key: Any) -> tuple[str, Optional[int], bool]:

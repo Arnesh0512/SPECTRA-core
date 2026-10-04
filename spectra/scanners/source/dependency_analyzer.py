@@ -475,7 +475,7 @@ class DependencyAnalyzer:
                         "package.json", "go.mod", "cargo.toml", "pom.xml"
                     }
                     if caller_path.is_file() and not is_manifest:
-                        p_str = str(caller_path) if str(caller_path).startswith("/proc/") else str(caller_path.resolve())
+                        p_str = str(caller_path) if "/proc/" in str(caller_path) else str(caller_path.resolve())
                         if not p_str.startswith(str(lib_path)):
                             callers.add(p_str)
             self.caller_cache[sig] = callers

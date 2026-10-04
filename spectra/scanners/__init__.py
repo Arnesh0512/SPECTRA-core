@@ -72,7 +72,7 @@ class MasterScanner:
         if target_dir:
             try:
                 if target_dir.exists():
-                    if str(target_dir).startswith("/proc/"):
+                    if "/proc/" in str(target_dir):
                         resolved_dir = target_dir
                     else:
                         resolved_dir = target_dir.resolve()
@@ -131,10 +131,8 @@ class MasterScanner:
                 if progress_callback and total_candidates > 0:
                     pct = 12.0 + (idx / total_candidates) * 28.0
                     desc = f"Domain 1/4: AST Parsing ({idx}/{total_candidates}) [{main_lang}] {file_path.name}"
-                    try:
-                        rel_loc = str(file_path.relative_to(resolved_dir)).replace("\\", "/") if resolved_dir else str(file_path).replace("\\", "/")
-                    except Exception:
-                        rel_loc = str(file_path).replace("\\", "/")
+                    from spectra.utils.system_paths import format_display_path
+                    rel_loc = format_display_path(file_path, resolved_dir)
                     progress_callback(
                         desc,
                         pct,

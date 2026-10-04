@@ -102,10 +102,8 @@ class ContainerScanner:
             if progress_callback and total_cnt > 0:
                 pct = 58.0 + (idx / total_cnt) * 4.0
                 desc = f"Domain 2/4: Auditing Container ({idx}/{total_cnt}) {path.name}"
-                try:
-                    rel_loc = str(path.relative_to(target_dir)).replace("\\", "/")
-                except Exception:
-                    rel_loc = str(path).replace("\\", "/")
+                from spectra.utils.system_paths import format_display_path
+                rel_loc = format_display_path(path, target_dir)
                 progress_callback(
                     desc,
                     pct,
@@ -116,11 +114,11 @@ class ContainerScanner:
                         "location": rel_loc,
                     }
                 )
-            findings.extend(self.scan_file(path))
+            findings.extend(self.scan_file(path, target_dir=target_dir))
 
         return findings
 
-    def scan_file(self, file_path: Path) -> List[ContainerFinding]:
+    def scan_file(self, file_path: Path, target_dir: Optional[Path] = None) -> List[ContainerFinding]:
         try:
             with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                 content = f.read()
@@ -129,13 +127,16 @@ class ContainerScanner:
 
         findings: List[ContainerFinding] = []
 
+        from spectra.utils.system_paths import format_display_path
+        clean_file_path = format_display_path(file_path, target_dir)
+
         # 1. Inspect for embedded private key blocks
         for match in self.embedded_key_regex.finditer(content):
             line_no = content[:match.start()].count("\n") + 1
             findings.append(ContainerFinding(
                 source_domain="artifacts",
                 artifact_type="container_definition",
-                file_path=str(file_path.resolve()),
+                file_path=clean_file_path,
                 line_number=line_no,
                 finding_category="embedded_crypto",
                 details="Hardcoded private key block detected directly inside Dockerfile",
@@ -146,7 +147,7 @@ class ContainerScanner:
                     "issue": "Private key material is baked into container image layers",
                     "severity": "CRITICAL"
                 }],
-                raw_metadata={"directive": "RUN/EMBEDDED"}
+                raw_metadata={"directive": "RUN/EMBEDDED", "host_path": str(file_path)}
             ))
 
         # 2. Inspect COPY/ADD directives copying sensitive key files
@@ -156,7 +157,7 @@ class ContainerScanner:
             findings.append(ContainerFinding(
                 source_domain="artifacts",
                 artifact_type="container_definition",
-                file_path=str(file_path.resolve()),
+                file_path=clean_file_path,
                 line_number=line_no,
                 finding_category="copied_key",
                 details=f"Copying private key artifact into image: '{matched_line}'",
@@ -167,7 +168,7 @@ class ContainerScanner:
                     "issue": "Sensitive private key files copied into container filesystem layer",
                     "severity": "HIGH"
                 }],
-                raw_metadata={"matched_instruction": matched_line}
+                raw_metadata={"matched_instruction": matched_line, "host_path": str(file_path)}
             ))
 
         # 3. Inspect ENV variables configuring TLS or OpenSSL
@@ -186,7 +187,7 @@ class ContainerScanner:
             findings.append(ContainerFinding(
                 source_domain="artifacts",
                 artifact_type="container_definition",
-                file_path=str(file_path.resolve()),
+                file_path=clean_file_path,
                 line_number=line_no,
                 finding_category="env_crypto",
                 details=f"Cryptographic environment variable set: {var_name}={var_val}",
@@ -194,7 +195,7 @@ class ContainerScanner:
                 quantum_safe=False,
                 shor_vulnerable=False,
                 security_findings=sec_findings,
-                raw_metadata={"env_var": var_name, "env_val": var_val}
+                raw_metadata={"env_var": var_name, "env_val": var_val, "host_path": str(file_path)}
             ))
 
         return findings

@@ -122,10 +122,8 @@ class NginxScanner:
             if progress_callback and total_cfg > 0:
                 pct = 90.0 + (idx / total_cfg) * 4.0
                 desc = f"Domain 4/4: Auditing Nginx ({idx}/{total_cfg}) {path.name}"
-                try:
-                    rel_loc = str(path.relative_to(target_dir)).replace("\\", "/") if target_dir else str(path).replace("\\", "/")
-                except Exception:
-                    rel_loc = str(path).replace("\\", "/")
+                from spectra.utils.system_paths import format_display_path
+                rel_loc = format_display_path(path, target_dir)
                 progress_callback(
                     desc,
                     pct,

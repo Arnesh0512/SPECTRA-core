@@ -249,7 +249,8 @@ class AssetNormalizer:
         return "approved"
 
     def _normalize_source(self, finding: Dict[str, Any]) -> NormalizedCryptoAsset:
-        file_path = finding.get("file_path", "")
+        from spectra.utils.system_paths import format_display_path
+        file_path = format_display_path(finding.get("file_path", ""))
         line = finding.get("line_number", 0)
         algo = finding.get("algorithm", "unknown").upper()
         primitive = finding.get("primitive", "symmetric_cipher").lower()
@@ -345,8 +346,9 @@ class AssetNormalizer:
         )
 
     def _normalize_artifact(self, finding: Dict[str, Any]) -> NormalizedCryptoAsset:
+        from spectra.utils.system_paths import format_display_path
         artifact_type = finding.get("artifact_type", "unknown")
-        file_path = finding.get("file_path", "")
+        file_path = format_display_path(finding.get("file_path", ""))
         lower_path = file_path.lower()
 
         if artifact_type in ["x509_certificate", "system_root_ca"]:
@@ -434,10 +436,11 @@ class AssetNormalizer:
         )
 
     def _normalize_infrastructure(self, finding: Dict[str, Any]) -> NormalizedCryptoAsset:
+        from spectra.utils.system_paths import format_display_path
         provider = finding.get("infra_provider", "infrastructure")
         algo = finding.get("algorithm", "unknown")
         key_size = finding.get("key_size")
-        arn = finding.get("resource_arn", finding.get("file_path", "infra"))
+        arn = format_display_path(finding.get("resource_arn", finding.get("file_path", "infra")))
         asset_id = self._generate_id("infra", arn, algo)
         qs = finding.get("quantum_safe", False)
         nist_status = self.resolve_nist_status(algo, "key_management", key_size, qs)

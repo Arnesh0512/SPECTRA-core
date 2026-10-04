@@ -137,20 +137,11 @@ class DependencyScanner:
             
             # Resolve the actual installation path of the package on disk
             installed_path = self.analyzer.locate_library_path(pkg_name, ecosystem, target_dir, manifest_file=file_path)
+            from spectra.utils.system_paths import format_display_path
             if installed_path and installed_path.exists():
-                try:
-                    rel_loc = str(installed_path.relative_to(target_dir)).replace("\\", "/")
-                except Exception:
-                    try:
-                        rel_loc = str(installed_path.relative_to(Path.home())).replace("\\", "/")
-                        rel_loc = f"~/{rel_loc}"
-                    except Exception:
-                        rel_loc = str(installed_path).replace("\\", "/")
+                rel_loc = format_display_path(installed_path, target_dir)
             else:
-                try:
-                    manifest_rel = str(file_path.relative_to(target_dir)).replace("\\", "/")
-                except Exception:
-                    manifest_rel = str(file_path).replace("\\", "/")
+                manifest_rel = format_display_path(file_path, target_dir)
                 rel_loc = f"[dim](not installed: {manifest_rel})[/dim]"
 
             if progress_callback:
@@ -186,7 +177,7 @@ class DependencyScanner:
 
     def _build_analysis_finding(self, res: Dict[str, Any], root: Path, file: Path, ecosystem: str = "dependency") -> SourceFinding:
         """Constructs an enriched finding with internal encryption and call graph metrics (Step 4)."""
-        file_p = str(file) if str(file).startswith("/proc/") else str(file.resolve())
+        file_p = str(file) if "/proc/" in str(file) else str(file.resolve())
         return SourceFinding(
             source_domain="source_code",
             language=ecosystem,
@@ -219,7 +210,7 @@ class DependencyScanner:
         )
 
     def _build_finding(self, raw: Dict[str, Any], ecosystem: str, root: Path, file: Path) -> SourceFinding:
-        file_p = str(file) if str(file).startswith("/proc/") else str(file.resolve())
+        file_p = str(file) if "/proc/" in str(file) else str(file.resolve())
         rel_path = str(file.relative_to(root).as_posix()) if file.is_relative_to(root) else file_p
         line_num = int(raw.get("line") or 1)
         pkg_name = str(raw["name"])

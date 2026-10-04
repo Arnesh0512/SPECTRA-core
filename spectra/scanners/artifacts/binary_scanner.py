@@ -99,10 +99,8 @@ class BinaryScanner:
             if progress_callback and total_bins > 0:
                 pct = 52.0 + (idx / total_bins) * 6.0
                 desc = f"Domain 2/4: Auditing Binary ({idx}/{total_bins}) {path.name}"
-                try:
-                    rel_loc = str(path.relative_to(target_dir)).replace("\\", "/")
-                except Exception:
-                    rel_loc = str(path).replace("\\", "/")
+                from spectra.utils.system_paths import format_display_path
+                rel_loc = format_display_path(path, target_dir)
                 progress_callback(
                     desc,
                     pct,
@@ -113,13 +111,13 @@ class BinaryScanner:
                         "location": rel_loc,
                     }
                 )
-            finding = self.scan_binary(path)
+            finding = self.scan_binary(path, target_dir=target_dir)
             if finding:
                 findings.append(finding)
 
         return findings
 
-    def scan_binary(self, file_path: Path) -> Optional[BinaryFinding]:
+    def scan_binary(self, file_path: Path, target_dir: Optional[Path] = None) -> Optional[BinaryFinding]:
         binary_fmt = self._detect_format(file_path)
         if binary_fmt == "non_binary":
             return None
@@ -181,17 +179,18 @@ class BinaryScanner:
             for item in list(linked_libs) + list(detected_symbols) + list(detected_algos)
         )
 
+        from spectra.utils.system_paths import format_display_path
         return BinaryFinding(
             source_domain="artifacts",
             artifact_type="compiled_binary",
-            file_path=str(file_path.resolve()),
+            file_path=format_display_path(file_path, target_dir),
             binary_format=binary_fmt,
             linked_crypto_libraries=sorted(list(linked_libs)),
             detected_symbols=sorted(list(detected_symbols)),
             detected_algorithms=sorted(list(detected_algos)),
             quantum_safe=is_quantum_safe,
             security_findings=sec_findings,
-            raw_metadata={"strings_analyzed_count": len(strings)}
+            raw_metadata={"strings_analyzed_count": len(strings), "host_path": str(file_path)}
         )
 
     def _detect_format(self, file_path: Path) -> str:

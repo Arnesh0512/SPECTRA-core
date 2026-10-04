@@ -95,10 +95,8 @@ class TerraformScanner:
             if progress_callback and total_tf > 0:
                 pct = 70.0 + (idx / total_tf) * 5.0
                 desc = f"Domain 3/4: Auditing Terraform ({idx}/{total_tf}) {path.name}"
-                try:
-                    rel_loc = str(path.relative_to(target_dir)).replace("\\", "/")
-                except Exception:
-                    rel_loc = str(path).replace("\\", "/")
+                from spectra.utils.system_paths import format_display_path
+                rel_loc = format_display_path(path, target_dir)
                 progress_callback(
                     desc,
                     pct,

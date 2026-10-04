@@ -121,7 +121,7 @@ class CredentialLocator:
 
     def __init__(self, target_dir: Optional[Path] = None, container_target: Optional[str] = None):
         if target_dir:
-            self.target_dir = Path(target_dir) if str(target_dir).startswith("/proc/") else Path(target_dir).resolve()
+            self.target_dir = Path(target_dir) if "/proc/" in str(target_dir) else Path(target_dir).resolve()
         else:
             self.target_dir = None
         self.container_target = container_target.strip() if container_target else None

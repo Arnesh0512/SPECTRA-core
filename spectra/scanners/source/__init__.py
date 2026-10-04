@@ -146,7 +146,7 @@ class SourceScanOrchestrator:
         }
 
         curr = file_path.parent
-        root = root_dir if (root_dir and str(root_dir).startswith("/proc/")) else (root_dir.resolve() if root_dir else None)
+        root = root_dir if (root_dir and "/proc/" in str(root_dir)) else (root_dir.resolve() if root_dir else None)
 
         while curr:
             name_lower = curr.name.lower()
