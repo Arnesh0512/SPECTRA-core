@@ -100,8 +100,8 @@ class ContainerScanner:
         total_cnt = len(container_files)
         for idx, path in enumerate(container_files, start=1):
             if progress_callback and total_cnt > 0:
-                pct = 58.0 + (idx / total_cnt) * 4.0
-                desc = f"Domain 2/4: Auditing Container ({idx}/{total_cnt}) {path.name}"
+                pct = 92.0 + (idx / total_cnt) * 4.0
+                desc = f"Domain 4/4: Auditing Container ({idx}/{total_cnt}) {path.name}"
                 from spectra.utils.system_paths import format_display_path
                 rel_loc = format_display_path(path, target_dir)
                 progress_callback(

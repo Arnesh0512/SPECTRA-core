@@ -93,8 +93,8 @@ class TerraformScanner:
         total_tf = len(tf_files)
         for idx, path in enumerate(tf_files, start=1):
             if progress_callback and total_tf > 0:
-                pct = 70.0 + (idx / total_tf) * 5.0
-                desc = f"Domain 3/4: Auditing Terraform ({idx}/{total_tf}) {path.name}"
+                pct = 30.0 + (idx / total_tf) * 10.0
+                desc = f"Domain 2/4: Auditing Terraform ({idx}/{total_tf}) {path.name}"
                 from spectra.utils.system_paths import format_display_path
                 rel_loc = format_display_path(path, target_dir)
                 progress_callback(
@@ -143,6 +143,27 @@ class TerraformScanner:
             )
             if finding:
                 findings.append(finding)
+
+        # Extract referenced certificate or private key files in Terraform configurations
+        cert_matches = re.findall(
+            r'(?:file\s*\(\s*["\']|["\'])([^"\']+\.(?:crt|pem|cer|key|p12|jks))["\']',
+            content,
+            re.IGNORECASE
+        )
+        if cert_matches:
+            for f in findings:
+                f.raw_metadata.setdefault("referenced_cert_paths", []).extend(cert_matches)
+            if not findings:
+                findings.append(TerraformFinding(
+                    source_domain="infrastructure",
+                    infra_provider="terraform",
+                    file_path=str(file_path.resolve()),
+                    line_number=1,
+                    resource_type="terraform_config",
+                    resource_name=file_path.stem,
+                    algorithm="X509-Certificate-Ref",
+                    raw_metadata={"referenced_cert_paths": cert_matches}
+                ))
 
         return findings
 

@@ -97,7 +97,7 @@ class InfrastructureScanOrchestrator:
         # 1. Scan Terraform IaC Configurations (.tf files)
         if target_dir and target_dir.exists():
             if progress_callback:
-                progress_callback("Domain 3/4: Auditing Terraform Configurations (.tf)...", 70.0)
+                progress_callback("Domain 2/4: Auditing Terraform Configurations (.tf)...", 30.0)
             log_step(f"Scanning Terraform configurations in: {target_dir}")
             tf_findings: List[TerraformFinding] = self.terraform_scanner.scan_directory(
                 target_dir=target_dir,
@@ -111,7 +111,7 @@ class InfrastructureScanOrchestrator:
         # 2. Scan Generic IaC Manifests (Kubernetes YAML, CloudFormation JSON/YAML)
         if target_dir and target_dir.exists():
             if progress_callback:
-                progress_callback("Domain 3/4: Auditing Generic IaC Manifests (K8s, CFN)...", 75.0)
+                progress_callback("Domain 2/4: Auditing Generic IaC Manifests (K8s, CFN)...", 40.0)
             log_step(f"Scanning generic IaC manifests in: {target_dir}")
             iac_findings: List[IaCFinding] = self.iac_scanner.scan_directory(
                 target_dir=target_dir,
@@ -124,7 +124,7 @@ class InfrastructureScanOrchestrator:
 
         # 3. Scan Host Hardware (TPMs, PKCS#11 HSMs, CPU Crypto Acceleration)
         if progress_callback:
-            progress_callback("Domain 3/4: Auditing Host TPM & CPU Acceleration...", 78.0)
+            progress_callback("Domain 2/4: Auditing Host TPM & CPU Acceleration...", 45.0)
         log_step("Scanning host cryptographic hardware (TPM, HSM, CPU instruction sets)")
         hw_findings: List[HardwareFinding] = self.hardware_scanner.scan()
         log_info(f"Discovered {len(hw_findings)} hardware cryptographic device(s)/capability.")
@@ -137,7 +137,7 @@ class InfrastructureScanOrchestrator:
 
         if aws_enabled:
             if progress_callback:
-                progress_callback("Domain 3/4: Auditing AWS KMS & ACM Keys...", 81.0)
+                progress_callback("Domain 2/4: Auditing AWS KMS & ACM Keys...", 47.0)
             log_step("Auditing AWS Cloud Cryptographic Assets (KMS & ACM)")
             if not self.aws_scanner.is_available():
                 log_warning("boto3 is not installed or importable; skipping live AWS scan.")
@@ -148,8 +148,8 @@ class InfrastructureScanOrchestrator:
                     all_findings.append(f.to_dict())
                     if progress_callback:
                         progress_callback(
-                            f"Domain 3/4: Cloud KMS Key [{f.algorithm}] {f.resource_id[:16]}",
-                            81.0,
+                            f"Domain 2/4: Cloud KMS Key [{f.algorithm}] {f.resource_id[:16]}",
+                            47.0,
                             item_info={
                                 "seq": f"{idx}/{len(aws_findings)}",
                                 "type": "cloud",
@@ -164,7 +164,7 @@ class InfrastructureScanOrchestrator:
 
         if azure_enabled:
             if progress_callback:
-                progress_callback("Domain 3/4: Auditing Azure Key Vault Keys & Certs...", 83.0)
+                progress_callback("Domain 2/4: Auditing Azure Key Vault Keys & Certs...", 48.5)
             log_step("Auditing Azure Cloud Cryptographic Assets (Key Vault Keys & Certificates)")
             if not self.azure_scanner.is_available():
                 log_warning("Azure SDK libraries (azure-identity, azure-mgmt-keyvault, azure-keyvault-keys) are not installed; skipping live Azure scan.")
@@ -175,8 +175,8 @@ class InfrastructureScanOrchestrator:
                     all_findings.append(f.to_dict())
                     if progress_callback:
                         progress_callback(
-                            f"Domain 3/4: Cloud Key Vault [{f.algorithm}] {f.resource_id}",
-                            83.0,
+                            f"Domain 2/4: Cloud Key Vault [{f.algorithm}] {f.resource_id}",
+                            48.5,
                             item_info={
                                 "seq": f"{idx}/{len(azure_findings)}",
                                 "type": "cloud",
@@ -191,7 +191,7 @@ class InfrastructureScanOrchestrator:
 
         if gcp_enabled:
             if progress_callback:
-                progress_callback("Domain 3/4: Auditing GCP Cloud KMS Keys...", 84.0)
+                progress_callback("Domain 2/4: Auditing GCP Cloud KMS Keys...", 49.5)
             log_step("Auditing GCP Cloud Cryptographic Assets (Cloud KMS)")
             if not self.gcp_scanner.is_available():
                 log_warning("gcloud CLI or GCP credentials not detected; skipping live GCP KMS scan.")
@@ -202,8 +202,8 @@ class InfrastructureScanOrchestrator:
                     all_findings.append(f.to_dict())
                     if progress_callback:
                         progress_callback(
-                            f"Domain 3/4: Cloud KMS Key [{f.algorithm}] {f.resource_id}",
-                            84.0,
+                            f"Domain 2/4: Cloud KMS Key [{f.algorithm}] {f.resource_id}",
+                            49.5,
                             item_info={
                                 "seq": f"{idx}/{len(gcp_findings)}",
                                 "type": "cloud",

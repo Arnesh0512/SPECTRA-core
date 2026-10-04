@@ -54,10 +54,12 @@ class NginxFinding:
         }
 
 
-# Regex to match directives in Nginx blocks
+# Regex to match directives in Nginx / Apache blocks
 DIRECTIVE_REGEX = re.compile(
     r"^\s*(?P<key>ssl_protocols|ssl_ciphers|ssl_prefer_server_ciphers|"
-    r"ssl_certificate|ssl_certificate_key|ssl_ecdh_curve|server_name|listen)\s+(?P<val>[^;]+);",
+    r"ssl_certificate|ssl_certificate_key|ssl_client_certificate|ssl_trusted_certificate|"
+    r"SSLCertificateFile|SSLCertificateKeyFile|SSLCACertificateFile|SSLCertificateChainFile|"
+    r"ssl_ecdh_curve|server_name|listen)\s+(?P<val>[^;]+);?",
     re.MULTILINE
 )
 
@@ -120,8 +122,8 @@ class NginxScanner:
         total_cfg = len(config_files)
         for idx, path in enumerate(config_files, start=1):
             if progress_callback and total_cfg > 0:
-                pct = 90.0 + (idx / total_cfg) * 4.0
-                desc = f"Domain 4/4: Auditing Nginx ({idx}/{total_cfg}) {path.name}"
+                pct = 50.0 + (idx / total_cfg) * 10.0
+                desc = f"Domain 3/4: Auditing Web Config ({idx}/{total_cfg}) {path.name}"
                 from spectra.utils.system_paths import format_display_path
                 rel_loc = format_display_path(path, target_dir)
                 progress_callback(
@@ -158,7 +160,7 @@ class NginxScanner:
                 findings.append(finding)
 
         # Fallback: file without explicit server blocks (e.g. ssl.conf snippet)
-        if not findings and ("ssl_protocols" in content or "ssl_ciphers" in content):
+        if not findings and ("ssl_protocols" in content or "ssl_ciphers" in content or "SSLCertificateFile" in content):
             finding = self._evaluate_server_block(file_path, 1, content)
             if finding:
                 findings.append(finding)
@@ -185,7 +187,8 @@ class NginxScanner:
             v = m.group("val").strip()
             directives[k] = v
 
-        if not any(k.startswith("ssl_") for k in directives):
+        has_ssl = any(k.startswith("ssl_") or k.startswith("SSL") for k in directives)
+        if not has_ssl:
             return None
 
         sec_findings = []
@@ -213,9 +216,25 @@ class NginxScanner:
             quantum_safe = True
             shor_vuln = False
 
+        cert_path = directives.get("ssl_certificate") or directives.get("SSLCertificateFile")
+        cert_key_path = directives.get("ssl_certificate_key") or directives.get("SSLCertificateKeyFile")
+
+        extra_certs = []
+        for k in ["ssl_client_certificate", "ssl_trusted_certificate", "SSLCACertificateFile", "SSLCertificateChainFile"]:
+            if k in directives and directives[k].strip():
+                extra_certs.append(directives[k].strip())
+
+        cfg_type = "apache" if "SSLCertificateFile" in directives or file_path.name in ["httpd.conf", "apache2.conf"] else "nginx"
+
+        raw_meta = {
+            "prefer_server_ciphers": directives.get("ssl_prefer_server_ciphers", "off")
+        }
+        if extra_certs:
+            raw_meta["additional_cert_paths"] = extra_certs
+
         return NginxFinding(
             source_domain="network",
-            config_type="nginx",
+            config_type=cfg_type,
             file_path=str(file_path.resolve()),
             line_number=line_no,
             server_name=directives.get("server_name", "default"),
@@ -223,12 +242,10 @@ class NginxScanner:
             protocols=protocols,
             ciphers=ciphers,
             ecdh_curve=ecdh_curve,
-            certificate_path=directives.get("ssl_certificate"),
-            certificate_key_path=directives.get("ssl_certificate_key"),
+            certificate_path=cert_path,
+            certificate_key_path=cert_key_path,
             quantum_safe=quantum_safe,
             shor_vulnerable=shor_vuln,
             security_findings=sec_findings,
-            raw_metadata={
-                "prefer_server_ciphers": directives.get("ssl_prefer_server_ciphers", "off")
-            }
+            raw_metadata=raw_meta
         )

@@ -43,6 +43,7 @@ class CertFinding:
     key_size: Optional[int] = None
     quantum_safe: bool = False
     shor_vulnerable: bool = True
+    config_source: Optional[str] = None
     security_findings: List[Dict[str, str]] = field(default_factory=list)
     raw_metadata: Dict[str, Any] = field(default_factory=dict)
 
@@ -63,6 +64,7 @@ class CertFinding:
             "key_size": self.key_size,
             "quantum_safe": self.quantum_safe,
             "shor_vulnerable": self.shor_vulnerable,
+            "config_source": self.config_source,
             "security_findings": self.security_findings,
             "raw_metadata": self.raw_metadata
         }
@@ -96,6 +98,7 @@ class CertScanner:
         excluded_dirs: Optional[List[str]] = None,
         include_system_certs: bool = False,
         progress_callback: Optional[Callable] = None,
+        config_discovered_certs: Optional[Dict[str, str]] = None,
     ) -> List[CertFinding]:
         findings: List[CertFinding] = []
         excluded = set(excluded_dirs or [])
@@ -108,6 +111,22 @@ class CertScanner:
 
         matching_files: List[Path] = []
         seen_files: Set[str] = set()
+        file_origins: Dict[str, str] = {}
+
+        # 1. Register and deduplicate config-discovered certificates (from Nginx, Terraform, IaC)
+        if config_discovered_certs:
+            for c_path_str, origin in config_discovered_certs.items():
+                p = Path(c_path_str)
+                if p.is_file():
+                    p_key = str(p.resolve() if "/proc/" not in str(p) else p)
+                    if p_key not in seen_files:
+                        seen_files.add(p_key)
+                        matching_files.append(p)
+                    if p_key in file_origins and origin not in file_origins[p_key]:
+                        file_origins[p_key] = f"{file_origins[p_key]},{origin}"
+                    else:
+                        file_origins[p_key] = origin
+
         import os
         for sdir in search_dirs:
             try:
@@ -119,6 +138,7 @@ class CertScanner:
                     for file_name in files:
                         p = Path(root) / file_name
                         p_key = str(p.resolve() if "/proc/" not in str(p) else p)
+                        # Avoid duplicate scanning of certificates already discovered via configs or earlier passes
                         if p_key in seen_files:
                             continue
                         suffix = p.suffix.lower()
@@ -146,13 +166,37 @@ class CertScanner:
 
         total_certs = len(matching_files)
         for idx, path in enumerate(matching_files, start=1):
+            p_key = str(path.resolve() if "/proc/" not in str(path) else path)
+            cfg_source = file_origins.get(p_key) or file_origins.get(str(path))
+            if not cfg_source:
+                # Fallback matching by filename for cross-platform/relative compatibility
+                fname = path.name.lower()
+                for k, orig in file_origins.items():
+                    if Path(k).name.lower() == fname:
+                        cfg_source = orig
+                        break
+
             is_sys_cand = is_preinstalled_system_ca(path, target_dir=target_dir)
-            item_type = "system ca" if is_sys_cand else "certificate"
-            label = "OS Root CA" if is_sys_cand else "Certificate"
+
+            if cfg_source:
+                # Normalize provider tokens to clean short names (e.g. kubernetes -> k8s, iac_manifest -> iac)
+                tokens = [
+                    "k8s" if t == "kubernetes" else ("iac" if t == "iac_manifest" else t)
+                    for t in cfg_source.split(",")
+                ]
+                clean_source = ",".join(dict.fromkeys(tokens))
+                item_type = f"{clean_source}-cert"
+                label = f"{clean_source.capitalize()} Cert"
+            elif is_sys_cand:
+                item_type = "system ca"
+                label = "OS Root CA"
+            else:
+                item_type = "certificate"
+                label = "Certificate"
 
             if progress_callback and total_certs > 0:
-                pct = 45.0 + (idx / total_certs) * 7.0
-                desc = f"Domain 2/4: Auditing {label} ({idx}/{total_certs}) {path.name}"
+                pct = 70.0 + (idx / total_certs) * 15.0
+                desc = f"Domain 4/4: Auditing {label} ({idx}/{total_certs}) {path.name}"
                 from spectra.utils.system_paths import format_display_path
                 rel_loc = format_display_path(path, target_dir)
                 progress_callback(
@@ -167,6 +211,9 @@ class CertScanner:
                 )
             finding = self.scan_file(path, target_dir=target_dir, include_system_certs=include_system_certs)
             if finding:
+                if cfg_source:
+                    finding.config_source = cfg_source
+                    finding.raw_metadata["config_source"] = cfg_source
                 findings.append(finding)
 
         return findings

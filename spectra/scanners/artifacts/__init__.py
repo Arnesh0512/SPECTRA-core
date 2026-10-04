@@ -28,7 +28,12 @@ class ArtifactScanOrchestrator:
         self.container_scanner = ContainerScanner()
         self.runtime_scanner = RuntimeScanner()
 
-    def scan(self, target_dir: Path, progress_callback: Optional[Callable[[str, float], None]] = None) -> List[Dict[str, Any]]:
+    def scan(
+        self,
+        target_dir: Path,
+        progress_callback: Optional[Callable[[str, float], None]] = None,
+        config_discovered_certs: Optional[Dict[str, str]] = None,
+    ) -> List[Dict[str, Any]]:
         """Scans directory for artifacts, and inspects local runtime environment if enabled."""
         log_step(f"Scanning cryptographic artifacts and runtime in: {target_dir}")
         excluded = self.config.source_scanner.excluded_directories
@@ -39,12 +44,13 @@ class ArtifactScanOrchestrator:
         if scan_certs_enabled:
             include_sys = getattr(self.config.scanners, "include_system_certs", False)
             if progress_callback:
-                progress_callback("Domain 2/4: Auditing X.509 Certificates & Asymmetric Keys...", 45.0)
+                progress_callback("Domain 4/4: Auditing X.509 Certificates & Asymmetric Keys...", 70.0)
             cert_findings = self.cert_scanner.scan_directory(
                 target_dir,
                 excluded_dirs=excluded,
                 include_system_certs=include_sys,
-                progress_callback=progress_callback
+                progress_callback=progress_callback,
+                config_discovered_certs=config_discovered_certs,
             )
             project_count = sum(1 for c in cert_findings if not c.is_system_ca)
             system_count = sum(1 for c in cert_findings if c.is_system_ca)
@@ -57,7 +63,7 @@ class ArtifactScanOrchestrator:
 
         # 2. Scan Binaries & Shared Libraries
         if progress_callback:
-            progress_callback("Domain 2/4: Auditing Executable Binaries & Shared Libraries...", 52.0)
+            progress_callback("Domain 4/4: Auditing Executable Binaries & Shared Libraries...", 85.0)
         binary_findings: List[BinaryFinding] = self.binary_scanner.scan_directory(
             target_dir, excluded_dirs=excluded, progress_callback=progress_callback
         )
@@ -65,7 +71,7 @@ class ArtifactScanOrchestrator:
 
         # 3. Scan Container Definitions & Dockerfiles
         if progress_callback:
-            progress_callback("Domain 2/4: Auditing Container Definitions & Dockerfiles...", 58.0)
+            progress_callback("Domain 4/4: Auditing Container Definitions & Dockerfiles...", 92.0)
         container_findings: List[ContainerFinding] = self.container_scanner.scan_directory(
             target_dir, excluded_dirs=excluded, progress_callback=progress_callback
         )
@@ -75,7 +81,7 @@ class ArtifactScanOrchestrator:
         runtime_findings: List[RuntimeFinding] = []
         if getattr(self.config.scanners, "enable_runtime", True):
             if progress_callback:
-                progress_callback("Domain 2/4: Inspecting Process Memory & Dynamic Runtime Packages...", 62.0)
+                progress_callback("Domain 4/4: Inspecting Process Memory & Dynamic Runtime Packages...", 96.0)
             runtime_findings = self.runtime_scanner.scan(target_dir)
             log_info(f"Discovered {len(runtime_findings)} active runtime package/process finding(s).")
 

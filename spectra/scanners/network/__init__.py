@@ -40,7 +40,7 @@ class NetworkScanOrchestrator:
         # 1. Static Configuration Auditing (Nginx, SSH)
         if target_dir and target_dir.exists():
             if progress_callback:
-                progress_callback("Domain 4/4: Auditing Static Nginx & Protocol Configs...", 90.0)
+                progress_callback("Domain 3/4: Auditing Static Nginx & Protocol Configs...", 50.0)
             log_step(f"Scanning network configuration files in: {target_dir}")
             excluded = self.config.source_scanner.excluded_directories
 
@@ -65,7 +65,7 @@ class NetworkScanOrchestrator:
 
         if target_endpoints:
             if progress_callback:
-                progress_callback(f"Domain 4/4: Handshaking {len(target_endpoints)} Network Endpoint(s)...", 95.0)
+                progress_callback(f"Domain 3/4: Handshaking {len(target_endpoints)} Network Endpoint(s)...", 60.0)
             log_step(f"Executing active TLS handshakes and recon against {len(target_endpoints)} endpoint(s)")
             recon_targets = self.recon_scanner.explicit_targets(target_endpoints)
             if recon_targets:
@@ -78,9 +78,9 @@ class NetworkScanOrchestrator:
             for idx, ep_str in enumerate(target_endpoints, start=1):
                 host, port = self._parse_endpoint(ep_str)
                 if progress_callback:
-                    pct = 95.0 + (idx / total_eps) * 5.0
+                    pct = 60.0 + (idx / total_eps) * 10.0
                     progress_callback(
-                        f"Domain 4/4: Handshaking {host}:{port} ({idx}/{total_eps})...",
+                        f"Domain 3/4: Handshaking {host}:{port} ({idx}/{total_eps})...",
                         pct,
                         item_info={
                             "seq": f"{idx}/{total_eps}",

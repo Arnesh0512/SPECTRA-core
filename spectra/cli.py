@@ -711,8 +711,8 @@ def scan(
 
     term_width = console.width if (console.width and console.width >= 60) else 100
     col1_w = 10
-    col2_w = 18
-    col3_w = max(24, term_width - 38)
+    col2_w = 20
+    col3_w = max(24, term_width - 40)
 
     type_colors = {
         "source code": "bright_cyan",
@@ -720,6 +720,10 @@ def scan(
         "dependency": "bright_yellow",
         "certifcate": "bright_green",
         "certificate": "bright_green",
+        "nginx-cert": "bright_green",
+        "terraform-cert": "bright_green",
+        "iac-cert": "bright_green",
+        "k8s-cert": "bright_green",
         "system ca": "dim cyan",
         "binary": "bright_magenta",
         "container": "bright_blue",
@@ -775,7 +779,12 @@ def scan(
                 progress.console.print(f"[cyan]├{'─' * (col1_w + 2)}┼{'─' * (col2_w + 2)}┼{'─' * (col3_w + 2)}┤[/cyan]")
                 header_printed = True
 
-            color = type_colors.get(itype.lower(), "bright_white")
+            color = type_colors.get(itype.lower())
+            if not color:
+                if itype.lower().endswith("-cert"):
+                    color = "bright_green"
+                else:
+                    color = "bright_white"
             esc_fn = escape(filename)
             esc_loc = escape(location)
             raw_col3 = f"{filename}  {location}" if location else filename

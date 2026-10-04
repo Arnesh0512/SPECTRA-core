@@ -97,8 +97,8 @@ class BinaryScanner:
         total_bins = len(bin_files)
         for idx, path in enumerate(bin_files, start=1):
             if progress_callback and total_bins > 0:
-                pct = 52.0 + (idx / total_bins) * 6.0
-                desc = f"Domain 2/4: Auditing Binary ({idx}/{total_bins}) {path.name}"
+                pct = 85.0 + (idx / total_bins) * 7.0
+                desc = f"Domain 4/4: Auditing Binary ({idx}/{total_bins}) {path.name}"
                 from spectra.utils.system_paths import format_display_path
                 rel_loc = format_display_path(path, target_dir)
                 progress_callback(

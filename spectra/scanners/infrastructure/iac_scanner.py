@@ -90,8 +90,8 @@ class IaCScanner:
         total_iac = len(iac_files)
         for idx, path in enumerate(iac_files, start=1):
             if progress_callback and total_iac > 0:
-                pct = 75.0 + (idx / total_iac) * 3.0
-                desc = f"Domain 3/4: Auditing IaC ({idx}/{total_iac}) {path.name}"
+                pct = 40.0 + (idx / total_iac) * 5.0
+                desc = f"Domain 2/4: Auditing IaC ({idx}/{total_iac}) {path.name}"
                 from spectra.utils.system_paths import format_display_path
                 rel_loc = format_display_path(path, target_dir)
                 progress_callback(
@@ -116,16 +116,27 @@ class IaCScanner:
         findings: List[IaCFinding] = []
         try:
             with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-                docs = yaml.safe_load_all(f)
-                for doc in docs:
-                    if not isinstance(doc, dict):
-                        continue
-                    # Check Kubernetes
-                    if "apiVersion" in doc and "kind" in doc:
-                        findings.extend(self._evaluate_k8s_doc(file_path, doc))
-                    # Check CloudFormation
-                    elif "AWSTemplateFormatVersion" in doc or "Resources" in doc:
-                        findings.extend(self._evaluate_cloudformation_doc(file_path, doc))
+                content = f.read()
+            import re
+            cert_matches = re.findall(
+                r'["\']?([^"\'\s\n\(\)]+\.(?:crt|pem|cer|key|p12|jks))["\']?',
+                content,
+                re.IGNORECASE
+            )
+            docs = yaml.safe_load_all(content)
+            for doc in docs:
+                if not isinstance(doc, dict):
+                    continue
+                # Check Kubernetes
+                if "apiVersion" in doc and "kind" in doc:
+                    findings.extend(self._evaluate_k8s_doc(file_path, doc))
+                # Check CloudFormation
+                elif "AWSTemplateFormatVersion" in doc or "Resources" in doc:
+                    findings.extend(self._evaluate_cloudformation_doc(file_path, doc))
+
+            if findings and cert_matches:
+                for f in findings:
+                    f.raw_metadata.setdefault("referenced_cert_paths", []).extend(cert_matches)
         except Exception:
             return []
         return findings
@@ -134,10 +145,21 @@ class IaCScanner:
         findings: List[IaCFinding] = []
         try:
             with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-                data = json.load(f)
+                content = f.read()
+            import re
+            cert_matches = re.findall(
+                r'["\']?([^"\'\s\n\(\)]+\.(?:crt|pem|cer|key|p12|jks))["\']?',
+                content,
+                re.IGNORECASE
+            )
+            data = json.loads(content)
             if isinstance(data, dict):
                 if "AWSTemplateFormatVersion" in data or "Resources" in data:
                     findings.extend(self._evaluate_cloudformation_doc(file_path, data))
+
+            if findings and cert_matches:
+                for f in findings:
+                    f.raw_metadata.setdefault("referenced_cert_paths", []).extend(cert_matches)
         except Exception:
             return []
         return findings

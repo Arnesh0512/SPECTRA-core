@@ -356,7 +356,13 @@ class AssetNormalizer:
             algo = finding.get("public_key_algorithm", "RSA")
             key_size = finding.get("key_size")
             subj = finding.get("subject", "unnamed")
-            name = f"OS Root CA ({subj})" if is_sys else f"Certificate ({subj})"
+            cfg_source = finding.get("config_source") or finding.get("raw_metadata", {}).get("config_source")
+            if cfg_source:
+                name = f"{cfg_source.capitalize()} Certificate ({subj})"
+            elif is_sys:
+                name = f"OS Root CA ({subj})"
+            else:
+                name = f"Certificate ({subj})"
             asset_type = "certificate"
             asset_prefix = "sys_ca" if is_sys else "cert"
             asset_id = self._generate_id(asset_prefix, file_path, str(finding.get("serial_number", "")))
@@ -365,6 +371,8 @@ class AssetNormalizer:
             meta = finding.get("raw_metadata", {}).copy()
             meta["is_system_ca"] = is_sys
             meta["scope"] = "system_trust_store" if is_sys else "application"
+            if cfg_source:
+                meta["config_source"] = cfg_source
             return NormalizedCryptoAsset(
                 asset_id=asset_id,
                 name=name,
