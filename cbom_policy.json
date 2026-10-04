@@ -49,6 +49,10 @@
     "biometrics_and_genomics": {
       "years": 75.0,
       "description": "Human genome sequences, biometric identity templates (non-revocable)"
+    },
+    "custom_user_defined": {
+      "years": 42.5,
+      "description": "User-specified custom data retention / shelf-life period"
     }
   },
   "asset_classification_overrides": {

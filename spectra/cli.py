@@ -176,7 +176,7 @@ def _render_step_card(step_num: int, total_steps: int, title: str, subtitle: str
         border_style="bright_blue",
         padding=(0, 2),
     )
-    console.print()
+    console.print("\n\n\n", end="")
     console.print(card)
 
 
@@ -247,6 +247,45 @@ def _render_kpi_cards(findings_count: int, assets_count: int, links_count: int, 
     console.print(Columns([c1, c2, c3, c4], expand=True))
 
 
+def confirm_ask(prompt: str, default: bool = True) -> bool:
+    """Prompts user for confirmation with [Y/n] or [y/N] styling:
+    Capital letter in bold bright_green, small letter in bold bright_magenta.
+    """
+    if default:
+        suffix = " [[bold bright_green]Y[/bold bright_green]/[bold bright_magenta]n[/bold bright_magenta]]: "
+    else:
+        suffix = " [[bold bright_magenta]y[/bold bright_magenta]/[bold bright_green]N[/bold bright_green]]: "
+
+    full_prompt = f"{prompt}{suffix}"
+    while True:
+        try:
+            resp = console.input(full_prompt).strip()
+        except (EOFError, KeyboardInterrupt):
+            return default
+        if not resp:
+            return default
+        resp_low = resp.lower()
+        if resp_low in ["y", "yes", "true", "1"]:
+            return True
+        elif resp_low in ["n", "no", "false", "0"]:
+            return False
+        console.print("      [dim red]Please enter 'y' or 'n'.[/dim red]")
+
+
+class ReconProgress(Progress):
+    """Custom Progress supporting transient live table rendering above progress bars."""
+
+    def __init__(self, *args, **kwargs):
+        self.live_table = None
+        super().__init__(*args, **kwargs)
+
+    def get_renderable(self):
+        prog = super().get_renderable()
+        if self.live_table is not None:
+            return Group(self.live_table, prog)
+        return prog
+
+
 @app.command()
 def scan(
     fail_on_critical: bool = typer.Option(
@@ -298,6 +337,11 @@ def scan(
         None,
         "--runtime/--no-runtime",
         help="Scan active process memory and dynamic runtime packages (.so, .dll, .dylib). Default is True.",
+    ),
+    table: Optional[bool] = typer.Option(
+        None,
+        "--table/--no-table",
+        help="Print full multi-row scanning discovery table in terminal. If False, displays single overwriting row.",
     ),
 ) -> None:
     """Run an interactive TUI wizard to configure and execute a multi-domain cryptographic scan."""
@@ -448,6 +492,9 @@ def scan(
         scan_cloud_hsm = True
         enable_infra = True
         endpoints = []
+        scan_live_tls = True
+        scan_nginx = True
+        scan_protocols = True
         enable_network = True
         from spectra.utils.system_paths import parse_endpoint_targets
         if target_container:
@@ -486,10 +533,34 @@ def scan(
             default=default_excludes,
         )
         excluded_dirs = [d.strip() for d in exclude_input.split(",") if d.strip()]
-        preview_excludes = "  ".join([f"[dim on grey23] {d} [/dim on grey23]" for d in excluded_dirs[:8]])
-        if len(excluded_dirs) > 8:
-            preview_excludes += f"  [dim]+{len(excluded_dirs) - 8} more[/dim]"
-        console.print(f"      [bold green]✔ Filters active ({len(excluded_dirs)}):[/bold green] {preview_excludes}")
+        prefix = f"      [bold green]✔ Filters active ({len(excluded_dirs)}):[/bold green]  "
+        prefix_len = 28 + len(str(len(excluded_dirs)))
+        term_w = console.width if (console.width and console.width >= 40) else 100
+        indent = " " * prefix_len
+
+        lines = []
+        curr_line = prefix
+        curr_len = prefix_len
+
+        for d in excluded_dirs:
+            tag_str = f"[grey50]{d}[/grey50]"
+            tag_len = len(d)
+            sep_len = 2 if (curr_line != prefix and curr_line != indent) else 0
+            sep = "  " if sep_len else ""
+
+            if curr_len + sep_len + tag_len > term_w and curr_line.strip():
+                lines.append(curr_line)
+                curr_line = indent + tag_str
+                curr_len = prefix_len + tag_len
+            else:
+                curr_line += sep + tag_str
+                curr_len += sep_len + tag_len
+
+        if curr_line.strip():
+            lines.append(curr_line)
+
+        for l in lines:
+            console.print(l)
 
         _render_step_card(
             3, 4,
@@ -499,19 +570,19 @@ def scan(
         )
 
         console.print("  [bold underline bright_cyan]Domain 1: Source Code & Call-Graph Inspection[/bold underline bright_cyan]")
-        scan_source = Confirm.ask("    [bright_white]• Scan codebase source files (AST & Token Analysis)[/bright_white]", default=True)
-        scan_deps = Confirm.ask("    [bright_white]• Scan Dependency manifests (SBOM & lockfiles)[/bright_white]", default=False)
+        scan_source = confirm_ask("    [bright_white]• Scan codebase source files (AST & Token Analysis)[/bright_white]", default=True)
+        scan_deps = confirm_ask("    [bright_white]• Scan Dependency manifests (SBOM & lockfiles)[/bright_white]", default=False)
 
-        console.print("\n  [bold underline magenta]Domain 2: Infrastructure & Cloud Key Management[/bold underline magenta]")
-        scan_terraform = Confirm.ask("    [bright_white]• Scan Terraform / IaC configurations (.tf, CloudFormation)[/bright_white]", default=True)
-        scan_docker = Confirm.ask("    [bright_white]• Scan Docker container files (Dockerfile, Compose)[/bright_white]", default=True)
-        scan_cloud_hsm = Confirm.ask("    [bright_white]• Scan Cloud KMS / HSM configurations (AWS/Azure/GCP)[/bright_white]", default=True)
+        console.print("\n\n\n  [bold underline magenta]Domain 2: Infrastructure & Cloud Key Management[/bold underline magenta]")
+        scan_terraform = confirm_ask("    [bright_white]• Scan Terraform / IaC configurations (.tf, CloudFormation)[/bright_white]", default=True)
+        scan_docker = confirm_ask("    [bright_white]• Scan Docker container files (Dockerfile, Compose)[/bright_white]", default=True)
+        scan_cloud_hsm = confirm_ask("    [bright_white]• Scan Cloud KMS / HSM configurations (AWS/Azure/GCP)[/bright_white]", default=True)
         enable_infra = scan_terraform or scan_docker or scan_cloud_hsm
 
-        console.print("\n  [bold underline blue]Domain 3: Network Protocols & TLS Perimeter[/bold underline blue]")
-        enable_network = Confirm.ask("    [bright_white]• Scan live network TLS endpoints & web servers?[/bright_white]", default=True)
+        console.print("\n\n\n  [bold underline blue]Domain 3: Network Protocols & TLS Perimeter[/bold underline blue]")
+        scan_live_tls = confirm_ask("    [bright_white]• Scan live network TLS endpoints & web servers?[/bright_white]", default=True)
         endpoints = []
-        if enable_network:
+        if scan_live_tls:
             from spectra.utils.system_paths import parse_endpoint_targets
 
             # 3.1 Localhost / Container Port Configuration (Prompted before remote endpoints)
@@ -611,8 +682,12 @@ def scan(
 
             console.print(f"      [bold green]✔ Total network targets registered: {len(endpoints)} endpoint(s).[/bold green]")
 
-        console.print("\n  [bold underline yellow]Domain 4: Cryptographic Artifacts & Binaries[/bold underline yellow]")
-        scan_certs = Confirm.ask("    [bright_white]• Scan X.509 Certificates & Private Keys (.pem, .crt, .key)[/bright_white]", default=True)
+        scan_nginx = confirm_ask("    [bright_white]• Scan Nginx web server cryptographic configurations (.conf, ssl_protocols)[/bright_white]", default=True)
+        scan_protocols = confirm_ask("    [bright_white]• Scan SSH & IPsec protocol configurations (/etc/ssh, sshd_config, ipsec.conf)[/bright_white]", default=True)
+        enable_network = scan_live_tls or scan_nginx or scan_protocols
+
+        console.print("\n\n\n  [bold underline yellow]Domain 4: Cryptographic Artifacts & Binaries[/bold underline yellow]")
+        scan_certs = confirm_ask("    [bright_white]• Scan X.509 Certificates & Private Keys (.pem, .crt, .key)[/bright_white]", default=True)
         scan_system_certs = False
         if scan_certs:
             if include_system_certs is not None:
@@ -620,16 +695,16 @@ def scan(
             else:
                 from spectra.utils.system_paths import get_os_trust_store_label
                 trust_label = get_os_trust_store_label(target_path)
-                scan_system_certs = Confirm.ask(
+                scan_system_certs = confirm_ask(
                     f"      [dim]↳ Include preinstalled OS root CA trust store ({trust_label})?[/dim]",
                     default=False,
                 )
-        scan_binaries = Confirm.ask("    [bright_white]• Scan Binary executables & shared libraries (.so, .dll, ELF)[/bright_white]", default=True)
-        scan_hardware = Confirm.ask("    [bright_white]• Scan Hardware cryptographic devices (TPM, HSM, CPU instruction sets)[/bright_white]", default=True)
+        scan_binaries = confirm_ask("    [bright_white]• Scan Binary executables & shared libraries (.so, .dll, ELF)[/bright_white]", default=True)
+        scan_hardware = confirm_ask("    [bright_white]• Scan Hardware cryptographic devices (TPM, HSM, CPU instruction sets)[/bright_white]", default=True)
         if runtime is not None:
             scan_runtime_artifacts = runtime
         else:
-            scan_runtime_artifacts = Confirm.ask("    [bright_white]• Scan Active process memory & dynamic runtime packages[/bright_white]", default=True)
+            scan_runtime_artifacts = confirm_ask("    [bright_white]• Scan Active process memory & dynamic runtime packages[/bright_white]", default=True)
         enable_artifacts = scan_certs or scan_binaries or scan_hardware or scan_runtime_artifacts
 
     # --- Pre-Flight Summary Manifest ---
@@ -644,7 +719,9 @@ def scan(
             "Terraform & IaC": scan_terraform,
             "Containers / Docker": scan_docker,
             "Cloud KMS / HSM": scan_cloud_hsm,
-            "Remote TLS Network": enable_network,
+            "Remote TLS Network": scan_live_tls,
+            "Nginx Web Server": scan_nginx,
+            "SSH & IPsec Protocols": scan_protocols,
             "X.509 Certs & Keys": scan_certs,
             "OS Root CA Store": scan_system_certs if scan_certs else False,
             "Binaries & DLLs": scan_binaries,
@@ -675,6 +752,8 @@ def scan(
             scan_hardware=scan_hardware,
             scan_binaries=scan_binaries,
             scan_terraform=scan_terraform,
+            scan_nginx=scan_nginx,
+            scan_protocols=scan_protocols,
         ),
         source_scanner=SourceScannerConfig(
             use_ripgrep=True,
@@ -706,12 +785,28 @@ def scan(
         "🚀",
     )
 
+    if target_container or Path("/.dockerenv").exists():
+        table_prompt = "    [bright_white]• Print scanning table in container?[/bright_white]"
+    else:
+        table_prompt = "    [bright_white]• Print scanning table?[/bright_white]"
+
+    if table is not None:
+        print_table = table
+    elif yes:
+        print_table = True
+    else:
+        console.print()
+        print_table = confirm_ask(table_prompt, default=True)
+        console.print()
+
+    config.output.print_table = print_table
+
     scanner = MasterScanner(config)
     engine = CryptoAnalysisEngine(config)
 
     from rich.markup import escape
 
-    progress = Progress(
+    progress = ReconProgress(
         SpinnerColumn("aesthetic", style="bold cyan"),
         TextColumn("{task.description}"),
         BarColumn(bar_width=32, style="grey23", complete_style="bold cyan", finished_style="bold green"),
@@ -725,6 +820,11 @@ def scan(
     col1_w = 10
     col2_w = 20
     col3_w = max(24, term_width - 40)
+
+    header_top = f"[cyan]╭{'─' * (col1_w + 2)}┬{'─' * (col2_w + 2)}┬{'─' * (col3_w + 2)}╮[/cyan]"
+    header_mid = f"[cyan]│[/cyan] [bold bright_cyan]{'Seq':^{col1_w}}[/bold bright_cyan] [cyan]│[/cyan] [bold bright_cyan]{'Type':<{col2_w}}[/bold bright_cyan] [cyan]│[/cyan] [bold bright_cyan]{'Filename & Location':<{col3_w}}[/bold bright_cyan] [cyan]│[/cyan]"
+    header_bot = f"[cyan]├{'─' * (col1_w + 2)}┼{'─' * (col2_w + 2)}┼{'─' * (col3_w + 2)}┤[/cyan]"
+    footer = f"[cyan]╰{'─' * (col1_w + 2)}┴{'─' * (col2_w + 2)}┴{'─' * (col3_w + 2)}╯[/cyan]"
 
     type_colors = {
         "source code": "bright_cyan",
@@ -770,6 +870,17 @@ def scan(
     with progress:
         header_printed = False
 
+        if not print_table:
+            init_type = "discovering..."[:col2_w]
+            init_msg = "Starting multi-domain reconnaissance..."[:col3_w]
+            init_row = (
+                f"[cyan]│[/cyan] [bold cyan]{'--':^{col1_w}}[/bold cyan] "
+                f"[cyan]│[/cyan] [dim white]{init_type:<{col2_w}}[/dim white] "
+                f"[cyan]│[/cyan] [dim white]{init_msg:<{col3_w}}[/dim white] "
+                f"[cyan]│[/cyan]"
+            )
+            progress.live_table = Text.from_markup(f"{header_top}\n{header_mid}\n{header_bot}\n{init_row}\n{footer}")
+
         def on_recon_progress(desc: str, pct: float, item_info: Optional[Dict[str, Any]] = None) -> None:
             nonlocal header_printed
             # stage_task reflects the current reconnaissance phase progress (0% -> 100%)
@@ -806,12 +917,6 @@ def scan(
                 else:
                     return
 
-            if not header_printed:
-                progress.console.print(f"[cyan]╭{'─' * (col1_w + 2)}┬{'─' * (col2_w + 2)}┬{'─' * (col3_w + 2)}╮[/cyan]")
-                progress.console.print(f"[cyan]│[/cyan] [bold bright_cyan]{'Seq':^{col1_w}}[/bold bright_cyan] [cyan]│[/cyan] [bold bright_cyan]{'Type':<{col2_w}}[/bold bright_cyan] [cyan]│[/cyan] [bold bright_cyan]{'Filename & Location':<{col3_w}}[/bold bright_cyan] [cyan]│[/cyan]")
-                progress.console.print(f"[cyan]├{'─' * (col1_w + 2)}┼{'─' * (col2_w + 2)}┼{'─' * (col3_w + 2)}┤[/cyan]")
-                header_printed = True
-
             color = type_colors.get(itype.lower())
             if not color:
                 if itype.lower().endswith("-cert"):
@@ -841,13 +946,67 @@ def scan(
                     styled_col3 = f"[bold white]{esc_fn}[/bold white]"
                 pad = " " * (col3_w - len(raw_col3))
 
-            row = (
-                f"[cyan]│[/cyan] [bold cyan]{seq:^{col1_w}}[/bold cyan] "
-                f"[cyan]│[/cyan] [{color}]{itype:<{col2_w}}[/{color}] "
-                f"[cyan]│[/cyan] {styled_col3}{pad} "
-                f"[cyan]│[/cyan]"
-            )
-            progress.console.print(row)
+            if print_table:
+                if not header_printed:
+                    progress.console.print(header_top)
+                    progress.console.print(header_mid)
+                    progress.console.print(header_bot)
+                    header_printed = True
+
+                # Wrap itype if it exceeds col2_w to preserve table column borders
+                itype_lines = []
+                if len(itype) <= col2_w:
+                    itype_lines = [itype]
+                elif "," in itype:
+                    parts = itype.split(",")
+                    curr = ""
+                    for p in parts:
+                        p_strip = p.strip()
+                        item = (curr + "," + p_strip) if curr else p_strip
+                        if len(item) <= col2_w:
+                            curr = item
+                        else:
+                            if curr:
+                                itype_lines.append(curr + ",")
+                            while len(p_strip) > col2_w:
+                                itype_lines.append(p_strip[:col2_w])
+                                p_strip = p_strip[col2_w:]
+                            curr = p_strip
+                    if curr:
+                        itype_lines.append(curr)
+                else:
+                    import textwrap
+                    itype_lines = textwrap.wrap(itype, width=col2_w) or [itype[:col2_w]]
+
+                first_type = itype_lines[0] if itype_lines else ""
+                row = (
+                    f"[cyan]│[/cyan] [bold cyan]{seq:^{col1_w}}[/bold cyan] "
+                    f"[cyan]│[/cyan] [{color}]{first_type:<{col2_w}}[/{color}] "
+                    f"[cyan]│[/cyan] {styled_col3}{pad} "
+                    f"[cyan]│[/cyan]"
+                )
+                progress.console.print(row)
+
+                for cont in itype_lines[1:]:
+                    cont_row = (
+                        f"[cyan]│[/cyan] {' ' * col1_w} "
+                        f"[cyan]│[/cyan] [{color}]{cont:<{col2_w}}[/{color}] "
+                        f"[cyan]│[/cyan] {' ' * col3_w} "
+                        f"[cyan]│[/cyan]"
+                    )
+                    progress.console.print(cont_row)
+            else:
+                trunc_type = itype[:col2_w - 3] + "..." if len(itype) > col2_w else itype
+                esc_trunc_type = escape(trunc_type)
+                esc_seq = escape(seq)
+                row = (
+                    f"[cyan]│[/cyan] [bold cyan]{esc_seq:^{col1_w}}[/bold cyan] "
+                    f"[cyan]│[/cyan] [{color}]{esc_trunc_type:<{col2_w}}[/{color}] "
+                    f"[cyan]│[/cyan] {styled_col3}{pad} "
+                    f"[cyan]│[/cyan]"
+                )
+                progress.live_table = Text.from_markup(f"{header_top}\n{header_mid}\n{header_bot}\n{row}\n{footer}")
+                progress.refresh()
 
         # 1. Multi-Domain Reconnaissance
         results: ScanResults = scanner.scan_all(
@@ -855,8 +1014,11 @@ def scan(
             endpoints=endpoints,
             progress_callback=on_recon_progress,
         )
-        if header_printed:
-            progress.console.print(f"[cyan]╰{'─' * (col1_w + 2)}┴{'─' * (col2_w + 2)}┴{'─' * (col3_w + 2)}╯[/cyan]")
+        if print_table and header_printed:
+            progress.console.print(footer)
+
+        if not print_table:
+            progress.live_table = None
 
         progress.update(stage_task, completed=100, description="[bold green]✔ Phase 1/5: Reconnaissance Complete[/bold green]")
         progress.console.print(f"  [bold green]✔[/bold green] Discovered {results.total_count:,} raw cryptographic telemetry findings.")
@@ -952,7 +1114,7 @@ def scan(
         )
         console.print(visualizer_panel)
         console.print(f"  🌐 [bold bright_cyan]Interactive Visualizer Link:[/bold bright_cyan] [bold underline bright_yellow][link={web_url}]{web_url}[/link][/bold underline bright_yellow]\n")
-        if not yes:
+        if not yes and sys.stdin.isatty():
             console.print("  [dim]Press Ctrl+C to shut down and exit...[/dim]\n")
             try:
                 while True:
@@ -1194,7 +1356,7 @@ def _print_quantum_risk_summary(mosca_evals: dict) -> None:
         "QUANTUM_SAFE": "[bold bright_green]✔ QUANTUM-SAFE[/bold bright_green]",
     }
 
-    for scenario, horizon_label, color in scenarios_meta:
+    for idx, (scenario, horizon_label, color) in enumerate(scenarios_meta):
         table = Table(
             title=f"[bold {color}]MOSCA QUANTUM RISK ASSESSMENT — {scenario.upper()} HORIZON [{horizon_label}][/bold {color}]",
             box=box.ROUNDED,
@@ -1234,7 +1396,10 @@ def _print_quantum_risk_summary(mosca_evals: dict) -> None:
             )
 
         if has_rows:
-            console.print()
+            if idx > 0:
+                console.print("\n\n")
+            else:
+                console.print()
             console.print(table)
             if critical_count > 0:
                 console.print(f"  [bold red]⚠ CRITICAL ALERT:[/bold red] [red]{critical_count:,} asset(s) fail Mosca's inequality in the {scenario} scenario.[/red]")

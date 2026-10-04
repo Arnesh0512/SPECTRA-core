@@ -45,22 +45,26 @@ class NetworkScanOrchestrator:
             log_step(f"Scanning network configuration files in: {target_dir}")
             excluded = self.config.source_scanner.excluded_directories
 
-            nginx_findings: List[NginxFinding] = self.nginx_scanner.scan_directory(
-                target_dir, excluded_dirs=excluded, progress_callback=progress_callback
-            )
-            log_info(f"Discovered {len(nginx_findings)} Nginx/web server cryptographic block(s).")
-            for nf in nginx_findings:
-                all_findings.append(nf.to_dict())
+            nginx_findings: List[NginxFinding] = []
+            if getattr(self.config.scanners, "scan_nginx", True):
+                nginx_findings = self.nginx_scanner.scan_directory(
+                    target_dir, excluded_dirs=excluded, progress_callback=progress_callback
+                )
+                log_info(f"Discovered {len(nginx_findings)} Nginx/web server cryptographic block(s).")
+                for nf in nginx_findings:
+                    all_findings.append(nf.to_dict())
 
-            proto_findings: List[ProtocolFinding] = self.protocol_scanner.scan_directory(
-                target_dir,
-                excluded_dirs=excluded,
-                progress_callback=progress_callback,
-                config_discovered_ssh_paths=config_discovered_ssh_paths,
-            )
-            log_info(f"Discovered {len(proto_findings)} protocol configuration(s).")
-            for pf in proto_findings:
-                all_findings.append(pf.to_dict())
+            proto_findings: List[ProtocolFinding] = []
+            if getattr(self.config.scanners, "scan_protocols", True):
+                proto_findings = self.protocol_scanner.scan_directory(
+                    target_dir,
+                    excluded_dirs=excluded,
+                    progress_callback=progress_callback,
+                    config_discovered_ssh_paths=config_discovered_ssh_paths,
+                )
+                log_info(f"Discovered {len(proto_findings)} protocol configuration(s).")
+                for pf in proto_findings:
+                    all_findings.append(pf.to_dict())
 
         # 2. Live Network Endpoint Scanning & Reconnaissance
         net_cfg = getattr(self.config, "network", None)
@@ -111,19 +115,25 @@ class NetworkScanOrchestrator:
                     pct = 55.0 + ((h_idx - 1) / max(total_hosts, 1)) * 5.0
                     progress_callback(
                         f"Domain 3/4: Port & Service Discovery on {host} ({h_idx}/{total_hosts})...",
-                        pct,
-                        item_info={
-                            "seq": f"{h_idx}/{total_hosts}",
-                            "type": "network endpoint",
-                            "filename": host,
-                            "location": f"{host} (discovering)",
-                        }
+                        pct
                     )
+
+                from spectra.utils.logger import console
+                console.print(f"\n[bold cyan]• Target Host:[/bold cyan] [bold bright_white]{host}[/bold bright_white] [dim](discovering)[/dim]")
 
                 discovered_services, engine = self.recon_scanner.discover_services(host, ports=req_ports)
                 log_info(f"Discovered {len(discovered_services)} active port(s) on {host} using {engine}.")
 
                 tot_svc = len(discovered_services)
+                table_rows = []
+                print_table = True
+                if hasattr(self, "config"):
+                    out_cfg = getattr(self.config, "output", None)
+                    if out_cfg and hasattr(out_cfg, "print_table"):
+                        print_table = out_cfg.print_table
+                    elif hasattr(self.config, "print_table"):
+                        print_table = self.config.print_table
+
                 for s_idx, s in enumerate(discovered_services, start=1):
                     port = s["port"]
                     svc_name = s.get("service") or "unknown"
@@ -137,13 +147,7 @@ class NetworkScanOrchestrator:
                         pct = 60.0 + (s_idx / max(tot_svc, 1)) * 10.0
                         progress_callback(
                             f"Domain 3/4: Auditing {loc_str} ({s_idx}/{tot_svc})...",
-                            pct,
-                            item_info={
-                                "seq": f"{s_idx}/{tot_svc}",
-                                "type": "network endpoint",
-                                "filename": host,
-                                "location": loc_str,
-                            }
+                            pct
                         )
 
                     # Branch A: SSL/TLS Endpoints
@@ -155,7 +159,16 @@ class NetworkScanOrchestrator:
                             finding.raw_metadata["service_version"] = version
                             finding.raw_metadata["discovery_engine"] = engine
                             all_findings.append(finding.to_dict())
-                            log_info(f"TLS Handshake successful for {host}:{port} -> {finding.cipher_suite}")
+                            crypto_label = f"[bold green]{finding.cipher_suite}[/bold green]"
+                            if finding.tls_version and finding.tls_version != "Unknown":
+                                crypto_label += f" [dim]({finding.tls_version})[/dim]"
+                            table_rows.append({
+                                "seq": f"{s_idx}/{tot_svc}",
+                                "type": "https" if svc_name in ["http", "unknown"] else svc_name,
+                                "port": f"{port}/tcp",
+                                "handshake": "[bold green]✔[/bold green]",
+                                "crypto": crypto_label,
+                            })
                         else:
                             failed_ep = NetworkEndpointFinding(
                                 source_domain="network",
@@ -176,7 +189,13 @@ class NetworkScanOrchestrator:
                                 }
                             )
                             all_findings.append(failed_ep.to_dict())
-                            log_info(f"TLS handshake could not complete for {host}:{port}")
+                            table_rows.append({
+                                "seq": f"{s_idx}/{tot_svc}",
+                                "type": svc_name,
+                                "port": f"{port}/tcp",
+                                "handshake": "[bold red]✖[/bold red]",
+                                "crypto": "[dim red]TLS Handshake Failed[/dim red]",
+                            })
 
                     # Branch B: SSH Endpoints
                     elif is_ssh:
@@ -203,7 +222,14 @@ class NetworkScanOrchestrator:
                                     },
                                     observation=obs,
                                 ).to_dict())
-                                log_info(f"SSH Host Key discovered for {host}:{port} -> {algo}")
+                            algo_first = ssh_obs[0].get("host_key_algorithm", "SSH-Host-Key")
+                            table_rows.append({
+                                "seq": f"{s_idx}/{tot_svc}",
+                                "type": "ssh",
+                                "port": f"{port}/tcp",
+                                "handshake": "[bold green]✔[/bold green]",
+                                "crypto": f"[bold cyan]{algo_first}[/bold cyan]",
+                            })
                         else:
                             all_findings.append(NetworkReconFinding(
                                 finding_type="network_crypto_observation",
@@ -226,6 +252,13 @@ class NetworkScanOrchestrator:
                                     "discovery_engine": engine,
                                 },
                             ).to_dict())
+                            table_rows.append({
+                                "seq": f"{s_idx}/{tot_svc}",
+                                "type": "ssh",
+                                "port": f"{port}/tcp",
+                                "handshake": "[bold yellow]?[/bold yellow]",
+                                "crypto": "[dim]Open SSH Port[/dim]",
+                            })
 
                     # Branch C: Cleartext / Non-cryptographic services (HTTP, Redis, etc.)
                     else:
@@ -255,7 +288,49 @@ class NetworkScanOrchestrator:
                             }
                         )
                         all_findings.append(cleartext_ep.to_dict())
-                        log_info(f"Cleartext service cataloged for {host}:{port} ({svc_name})")
+                        table_rows.append({
+                            "seq": f"{s_idx}/{tot_svc}",
+                            "type": svc_name,
+                            "port": f"{port}/tcp",
+                            "handshake": "[bold red]✖[/bold red]",
+                            "crypto": f"[dim yellow]Cleartext ({svc_name.upper()})[/dim yellow]",
+                        })
+
+                    if not print_table and progress_callback and table_rows:
+                        latest_row = table_rows[-1]
+                        import re
+                        plain_crypto = re.sub(r'\[/?[a-zA-Z0-9_\-\s=]+\]', '', latest_row['crypto'])
+                        progress_callback(
+                            f"Domain 3/4: Auditing {loc_str} ({s_idx}/{tot_svc})...",
+                            pct,
+                            item_info={
+                                "seq": latest_row["seq"],
+                                "type": latest_row["type"],
+                                "filename": f"{host}:{port}",
+                                "location": plain_crypto,
+                            }
+                        )
+
+                if print_table and table_rows:
+                    from rich.table import Table
+                    from rich import box
+                    net_table = Table(
+                        box=box.ROUNDED,
+                        border_style="cyan",
+                        show_header=True,
+                        header_style="bold bright_cyan",
+                        expand=False,
+                    )
+                    net_table.add_column("Seq", justify="center", width=8)
+                    net_table.add_column("Type", justify="left", width=12)
+                    net_table.add_column("Port", justify="center", width=10)
+                    net_table.add_column("TLS Handshake", justify="center", width=16)
+                    net_table.add_column("Cryptographic Cipher Suite / Finding", justify="left", min_width=38)
+
+                    for r in table_rows:
+                        net_table.add_row(r["seq"], r["type"], r["port"], r["handshake"], r["crypto"])
+
+                    console.print(net_table)
 
         return all_findings
 

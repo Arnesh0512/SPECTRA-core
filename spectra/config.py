@@ -30,6 +30,8 @@ class ScannerToggles(BaseModel):
     scan_hardware: bool = Field(default=True, description="Scan host cryptographic hardware (TPM, HSM, CPU)")
     scan_binaries: bool = Field(default=True, description="Scan binary executables and shared libraries")
     scan_terraform: bool = Field(default=True, description="Scan Terraform and IaC configurations")
+    scan_nginx: bool = Field(default=True, description="Scan Nginx configurations for crypto blocks")
+    scan_protocols: bool = Field(default=True, description="Scan SSH and IPsec protocol configurations")
 
 
 class SourceScannerConfig(BaseModel):
@@ -139,6 +141,7 @@ class MoscaConfig(BaseModel):
 class OutputConfig(BaseModel):
     format: str = Field(default="cyclonedx_1.6_json", description="Target CBOM export format")
     output_file: str = Field(default="cbom.json", description="Destination file for generated CBOM")
+    print_table: bool = Field(default=True, description="Whether to print full scanning discovery tables")
 
 
 class ScanConfig(BaseModel):

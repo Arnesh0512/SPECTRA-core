@@ -86,8 +86,35 @@ def print_banner(version: str = "1.0.0") -> None:
 
 
 def log_step(step_name: str) -> None:
-    """Prints a highlighted step indicator."""
-    console.print(f"\n[bold green]➜[/bold green] [bold white]{step_name}[/bold white]")
+    """Prints a highlighted step indicator or prominent domain separator."""
+    import re
+    from rich import box
+    from rich.panel import Panel
+
+    m = re.match(r"^Domain\s+(\d/\d)[:\s]+(.*)$", step_name, re.IGNORECASE)
+    if m:
+        dom_idx = m.group(1)
+        dom_title = m.group(2).upper().strip()
+        domain_styles = {
+            "1/4": ("bold bright_cyan", "cyan", "⚛"),
+            "2/4": ("bold bright_magenta", "magenta", "☁"),
+            "3/4": ("bold bright_yellow", "yellow", "🌐"),
+            "4/4": ("bold bright_green", "green", "🛡️"),
+        }
+        title_style, border_style, icon = domain_styles.get(dom_idx, ("bold bright_white", "cyan", "⚡"))
+
+        console.print("\n\n\n\n", end="")
+        console.print(
+            Panel(
+                f"[{title_style}]{icon}  DOMAIN {dom_idx}: {dom_title}[/{title_style}]",
+                border_style=border_style,
+                box=box.HEAVY,
+                expand=True,
+                padding=(0, 2),
+            )
+        )
+    else:
+        console.print(f"\n\n[bold green]➜[/bold green] [bold white]{step_name}[/bold white]")
 
 
 def log_info(message: str) -> None:

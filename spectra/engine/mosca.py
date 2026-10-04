@@ -231,12 +231,15 @@ class MoscaRiskEngine:
         console.print("\n[bold yellow]ℹ Data classification / shelf-life (X) could not be automatically detected via ripgrep scan.[/bold yellow]")
         console.print("[bold cyan]Please select the appropriate data shelf-life category for this codebase:[/bold cyan]\n")
 
-        cat_keys = list(self.shelf_life_categories.keys())
+        cat_keys = [k for k in self.shelf_life_categories.keys() if k != "custom_user_defined"]
         for idx, key in enumerate(cat_keys, start=1):
             info = self.shelf_life_categories[key]
             years = info.get("years")
             desc = info.get("description")
             console.print(f"  [bold white]{idx}.[/bold white] [cyan]{key}[/cyan] ([bold green]{years} yrs[/bold green]) - {desc}")
+
+        none_of_above_idx = len(cat_keys) + 1
+        console.print(f"  [bold white]{none_of_above_idx}.[/bold white] [bold bright_yellow]None of the above[/bold bright_yellow] - Specify custom data retention / shelf-life (X) in years")
 
         console.print()
         while True:
@@ -251,6 +254,45 @@ class MoscaRiskEngine:
                     val = float(self.shelf_life_categories[selected_key]["years"])
                     console.print(f"[green]✔ Selected category '{selected_key}' ({val} years)[/green]\n")
                     return val
+                elif num == none_of_above_idx:
+                    while True:
+                        custom_input = input("↳ Enter custom data shelf-life (X) in years (e.g., 2.5, 12, 50) [7.0]: ").strip()
+                        if not custom_input:
+                            custom_val = 7.0
+                            break
+                        try:
+                            custom_val = float(custom_input)
+                            if custom_val > 0:
+                                break
+                            console.print("[bold red]Please enter a positive number of years.[/bold red]")
+                        except ValueError:
+                            console.print("[bold red]Invalid number. Please enter a valid float or integer (e.g., 5.5).[/bold red]")
+
+                    console.print(f"[green]✔ Configured custom shelf-life (X = {custom_val} years)[/green]\n")
+
+                    self.shelf_life_categories["custom_user_defined"] = {
+                        "years": custom_val,
+                        "description": "User-specified custom data retention / shelf-life period"
+                    }
+
+                    # Persist custom value to cbom_policy.json
+                    try:
+                        p_file = getattr(self, "policy_file", None) or (Path(__file__).resolve().parent.parent.parent / "cbom_policy.json")
+                        if p_file.exists():
+                            with open(p_file, "r", encoding="utf-8") as f_policy:
+                                p_data = json.load(f_policy)
+                            if "default_shelf_life_x" not in p_data:
+                                p_data["default_shelf_life_x"] = {}
+                            p_data["default_shelf_life_x"]["custom_user_defined"] = {
+                                "years": custom_val,
+                                "description": "User-specified custom data retention / shelf-life period"
+                            }
+                            with open(p_file, "w", encoding="utf-8") as f_policy:
+                                json.dump(p_data, f_policy, indent=2)
+                    except Exception:
+                        pass
+
+                    return custom_val
             except (ValueError, EOFError, KeyboardInterrupt):
                 console.print("\n[bold yellow]Input stream interrupted or invalid. Defaulting to 7.0 years.[/bold yellow]")
                 return 7.0
