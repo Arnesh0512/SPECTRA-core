@@ -20,6 +20,7 @@ class HardwareFinding:
     """Represents a discovered hardware cryptographic device or capability."""
     source_domain: str = "infrastructure"
     infra_provider: str = "hardware"
+    file_path: str = ""
     device_type: str = "unknown"
     device_name: str = ""
     status: str = "active"
@@ -33,6 +34,7 @@ class HardwareFinding:
         return {
             "source_domain": self.source_domain,
             "infra_provider": self.infra_provider,
+            "file_path": self.file_path or self.device_name,
             "device_type": self.device_type,
             "device_name": self.device_name,
             "status": self.status,
@@ -67,61 +69,74 @@ class HardwareScanner:
         except Exception:
             return {}
 
-    def scan(self) -> List[HardwareFinding]:
+    def scan(self, target_dir: Optional[Path] = None) -> List[HardwareFinding]:
         """Runs cross-platform hardware audit checks across TPM, HSM libraries, and CPU crypto instructions[cite: 35]."""
         findings: List[HardwareFinding] = []
-        findings.extend(self._scan_tpm())
-        findings.extend(self._scan_pkcs11_hsms())
-        findings.extend(self._scan_cpu_crypto_capabilities())
+        findings.extend(self._scan_tpm(target_dir))
+        findings.extend(self._scan_pkcs11_hsms(target_dir))
+        findings.extend(self._scan_cpu_crypto_capabilities(target_dir))
         return findings
 
-    def _scan_tpm(self) -> List[HardwareFinding]:
+    def _scan_tpm(self, target_dir: Optional[Path] = None) -> List[HardwareFinding]:
         findings: List[HardwareFinding] = []
         system = platform.system()
 
         # 1. Linux TPM check[cite: 35]
         if system == "Linux":
-            tpm_class_path = Path("/sys/class/tpm")
-            if tpm_class_path.exists():
-                for dev in tpm_class_path.glob("tpm*"):
-                    tpm_version = "TPM 2.0"
-                    desc_path = dev / "device/description"
-                    if desc_path.exists():
-                        try:
-                            desc = desc_path.read_text(encoding="utf-8").strip()
-                            if "1.2" in desc:
-                                tpm_version = "TPM 1.2"
-                        except Exception:
-                            pass
+            tpm_class_paths = [Path("/sys/class/tpm")]
+            if target_dir:
+                tpm_class_paths.append(target_dir / "sys/class/tpm")
 
-                    sec_findings = []
-                    if tpm_version == "TPM 1.2":
-                        sec_findings.append({
-                            "issue": "Legacy TPM 1.2 hardware detected (relies on deprecated SHA-1)",
-                            "severity": "HIGH"
-                        })
+            for tpm_class_path in tpm_class_paths:
+                if tpm_class_path.exists():
+                    for dev in tpm_class_path.glob("tpm*"):
+                        tpm_version = "TPM 2.0"
+                        desc_path = dev / "device/description"
+                        if desc_path.exists():
+                            try:
+                                desc = desc_path.read_text(encoding="utf-8").strip()
+                                if "1.2" in desc:
+                                    tpm_version = "TPM 1.2"
+                            except Exception:
+                                pass
 
-                    findings.append(HardwareFinding(
-                        device_type="tpm",
-                        device_name=f"{dev.name} ({tpm_version})",
-                        status="present",
-                        algorithm="RSA-2048 / ECC-NIST-P256",
-                        quantum_safe=False,
-                        shor_vulnerable=True,
-                        security_findings=sec_findings,
-                        raw_metadata={"sysfs_path": str(dev), "version": tpm_version}
-                    ))
-            elif Path("/dev/tpmrm0").exists():
-                findings.append(HardwareFinding(
-                    device_type="tpm",
-                    device_name="TPM 2.0 Resource Manager (/dev/tpmrm0)",
-                    status="present",
-                    algorithm="RSA / ECC",
-                    quantum_safe=False,
-                    shor_vulnerable=True,
-                    security_findings=[],
-                    raw_metadata={"dev_path": "/dev/tpmrm0"}
-                ))
+                        sec_findings = []
+                        if tpm_version == "TPM 1.2":
+                            sec_findings.append({
+                                "issue": "Legacy TPM 1.2 hardware detected (relies on deprecated SHA-1)",
+                                "severity": "HIGH"
+                            })
+
+                        findings.append(HardwareFinding(
+                            device_type="tpm",
+                            device_name=f"{dev.name} ({tpm_version})",
+                            status="present",
+                            algorithm="RSA-2048 / ECC-NIST-P256",
+                            quantum_safe=False,
+                            shor_vulnerable=True,
+                            security_findings=sec_findings,
+                            raw_metadata={"sysfs_path": str(dev), "version": tpm_version}
+                        ))
+                    if findings:
+                        break
+
+            if not findings:
+                dev_paths = [Path("/dev/tpmrm0"), Path("/dev/tpm0")]
+                if target_dir:
+                    dev_paths.extend([target_dir / "dev/tpmrm0", target_dir / "dev/tpm0"])
+                for dev_p in dev_paths:
+                    if dev_p.exists():
+                        findings.append(HardwareFinding(
+                            device_type="tpm",
+                            device_name=f"TPM 2.0 ({dev_p.name})",
+                            status="present",
+                            algorithm="RSA / ECC",
+                            quantum_safe=False,
+                            shor_vulnerable=True,
+                            security_findings=[],
+                            raw_metadata={"dev_path": str(dev_p)}
+                        ))
+                        break
 
         # 2. Windows TPM check via PowerShell[cite: 35]
         elif system == "Windows":
@@ -144,59 +159,72 @@ class HardwareScanner:
 
         return findings
 
-    def _scan_pkcs11_hsms(self) -> List[HardwareFinding]:
+    def _scan_pkcs11_hsms(self, target_dir: Optional[Path] = None) -> List[HardwareFinding]:
         findings: List[HardwareFinding] = []
+        seen_libs = set()
         for lib_path_str in self.pkcs11_libs:
-            lib_path = Path(lib_path_str)
-            if lib_path.exists():
-                provider_name = "PKCS#11 Module"
-                lower_str = lib_path_str.lower()
-                if "cloudhsm" in lower_str:
-                    provider_name = "AWS CloudHSM"
-                elif "softhsm" in lower_str:
-                    provider_name = "SoftHSM2"
-                elif "opensc" in lower_str or "ykcs11" in lower_str:
-                    provider_name = "SmartCard / HSM Token"
+            candidates = [Path(lib_path_str)]
+            if target_dir:
+                candidates.append(target_dir / lib_path_str.lstrip("/\\"))
+            for lib_path in candidates:
+                if lib_path.exists() and lib_path.name not in seen_libs:
+                    seen_libs.add(lib_path.name)
+                    provider_name = "PKCS#11 Module"
+                    lower_str = lib_path_str.lower()
+                    if "cloudhsm" in lower_str:
+                        provider_name = "AWS CloudHSM"
+                    elif "softhsm" in lower_str:
+                        provider_name = "SoftHSM2"
+                    elif "opensc" in lower_str or "ykcs11" in lower_str:
+                        provider_name = "SmartCard / HSM Token"
 
-                findings.append(HardwareFinding(
-                    device_type="hsm",
-                    device_name=f"{provider_name} ({lib_path.name})",
-                    status="library_installed",
-                    algorithm="Hardware-Protected Keys",
-                    quantum_safe=False,
-                    shor_vulnerable=True,
-                    security_findings=[],
-                    raw_metadata={"module_path": str(lib_path)}
-                ))
+                    findings.append(HardwareFinding(
+                        device_type="hsm",
+                        device_name=f"{provider_name} ({lib_path.name})",
+                        status="library_installed",
+                        algorithm="Hardware-Protected Keys",
+                        quantum_safe=False,
+                        shor_vulnerable=True,
+                        security_findings=[],
+                        raw_metadata={"module_path": str(lib_path)}
+                    ))
+                    break
 
         return findings
 
-    def _scan_cpu_crypto_capabilities(self) -> List[HardwareFinding]:
+    def _scan_cpu_crypto_capabilities(self, target_dir: Optional[Path] = None) -> List[HardwareFinding]:
         findings: List[HardwareFinding] = []
         cpu_features: List[str] = []
         system = platform.system()
 
         # 1. Linux CPU info check[cite: 35]
-        if system == "Linux" and Path("/proc/cpuinfo").exists():
-            try:
-                content = Path("/proc/cpuinfo").read_text(encoding="utf-8", errors="ignore")
-                flags_match = re.search(r"^(?:flags|Features)\s*:\s*(.+)$", content, re.MULTILINE)
-                if flags_match:
-                    raw_flags = flags_match.group(1).split()
-                    for target_flag in self.cpu_flags:
-                        if target_flag in raw_flags:
-                            cpu_features.append(target_flag)
-            except Exception:
-                pass
+        cpuinfo_paths = [Path("/proc/cpuinfo")]
+        if target_dir:
+            cpuinfo_paths.append(target_dir / "proc/cpuinfo")
+
+        for c_path in cpuinfo_paths:
+            if c_path.exists():
+                try:
+                    content = c_path.read_text(encoding="utf-8", errors="ignore")
+                    flags_match = re.search(r"^(?:flags|Features)\s*:\s*(.+)$", content, re.MULTILINE)
+                    if flags_match:
+                        raw_flags = flags_match.group(1).split()
+                        for target_flag in self.cpu_flags:
+                            if target_flag in raw_flags:
+                                cpu_features.append(target_flag)
+                        if cpu_features:
+                            break
+                except Exception:
+                    pass
 
         # 2. Windows CPU info check[cite: 35]
-        elif system == "Windows":
+        if not cpu_features and system == "Windows":
             processor_arch = platform.machine()
             if processor_arch in ["AMD64", "x86_64", "ARM64"]:
                 cpu_features.extend(["aes", "sha2"])
 
         # 3. macOS CPU info check[cite: 35]
-        elif system == "Darwin":
+        elif not cpu_features and system == "Darwin":
             try:
                 result = subprocess.run(["sysctl", "-n", "machdep.cpu.features"], capture_output=True, text=True, timeout=3)
                 if result.returncode == 0:
@@ -217,7 +245,7 @@ class HardwareScanner:
                 quantum_safe=True,
                 shor_vulnerable=False,
                 security_findings=[],
-                raw_metadata={"features": list(set(cpu_features))}
+                raw_metadata={"features": sorted(list(set(cpu_features)))}
             ))
 
         return findings

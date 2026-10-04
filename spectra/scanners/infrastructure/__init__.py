@@ -126,10 +126,27 @@ class InfrastructureScanOrchestrator:
         if progress_callback:
             progress_callback("Domain 2/4: Auditing Host TPM & CPU Acceleration...", 45.0)
         log_step("Scanning host cryptographic hardware (TPM, HSM, CPU instruction sets)")
-        hw_findings: List[HardwareFinding] = self.hardware_scanner.scan()
+        hw_findings: List[HardwareFinding] = self.hardware_scanner.scan(target_dir=target_dir)
         log_info(f"Discovered {len(hw_findings)} hardware cryptographic device(s)/capability.")
-        for f in hw_findings:
+        total_hw = len(hw_findings)
+        for idx, f in enumerate(hw_findings, 1):
             all_findings.append(f.to_dict())
+            if progress_callback and total_hw > 0:
+                feat = f.raw_metadata.get("features", [])
+                feat_str = f"[{', '.join(feat).upper()}] " if feat else ""
+                loc = f.raw_metadata.get("sysfs_path") or f.raw_metadata.get("dev_path") or f.raw_metadata.get("module_path") or f.raw_metadata.get("platform") or f.algorithm
+                if feat_str:
+                    loc = f"{feat_str}{loc}"
+                progress_callback(
+                    f"Domain 2/4: Host Crypto Hardware ({idx}/{total_hw}) {f.device_name}",
+                    45.0 + (idx / total_hw) * 2.0,
+                    item_info={
+                        "seq": f"{idx}/{total_hw}",
+                        "type": "hardware",
+                        "filename": f.device_name,
+                        "location": loc,
+                    }
+                )
 
         # 4. Scan AWS Cloud Resources (KMS CMKs, ACM Certificates if enabled)
         aws_cfg = getattr(self.config, "aws", None)
