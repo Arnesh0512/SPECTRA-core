@@ -430,6 +430,32 @@ class AssetNormalizer:
                 security_findings=finding.get("security_findings", []),
                 raw_metadata=finding.get("raw_metadata", {}),
             )
+        elif artifact_type == "runtime_environment" or finding.get("finding_category") in [
+            "loaded_shared_library", "cryptographic_library", "tls_library",
+            "kdf_library", "hash_library", "ssh_library", "hsm_runtime", "post_quantum_runtime"
+        ]:
+            algo = finding.get("algorithm", "Native-Crypto-Runtime")
+            lib_name = Path(file_path).name
+            asset_id = self._generate_id("rt", file_path, algo)
+            qs = finding.get("quantum_safe", False)
+            raw_meta = finding.get("raw_metadata", {}) or {}
+            pids = raw_meta.get("pids", [])
+            pid_str = f" [PID: {','.join(pids[:2])}]" if pids else ""
+            nist_status = self.resolve_nist_status(algo, "runtime", None, qs)
+            return NormalizedCryptoAsset(
+                asset_id=asset_id,
+                name=f"Runtime Library ({lib_name}){pid_str}",
+                asset_type="runtime_package",
+                source_domain="artifacts",
+                location=file_path,
+                algorithm=algo,
+                primitive="multiple",
+                quantum_safe=qs,
+                shor_vulnerable=finding.get("shor_vulnerable", not qs),
+                nist_status=nist_status,
+                security_findings=finding.get("security_findings", []),
+                raw_metadata=raw_meta,
+            )
         
         # Intelligent fallback for private keys and key stores based on filename/path clues
         algo = finding.get("algorithm", "")

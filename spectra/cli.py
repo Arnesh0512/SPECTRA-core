@@ -294,6 +294,11 @@ def scan(
         "--include-system-certs/--skip-system-certs",
         help="Include preinstalled OS root CA trust store (Linux /etc/ssl/certs, Windows Root Store, macOS Keychain). Default is False (skipped).",
     ),
+    runtime: Optional[bool] = typer.Option(
+        None,
+        "--runtime/--no-runtime",
+        help="Scan active process memory and dynamic runtime packages (.so, .dll, .dylib). Default is True.",
+    ),
 ) -> None:
     """Run an interactive TUI wizard to configure and execute a multi-domain cryptographic scan."""
     _render_hero_banner()
@@ -621,7 +626,10 @@ def scan(
                 )
         scan_binaries = Confirm.ask("    [bright_white]• Scan Binary executables & shared libraries (.so, .dll, ELF)[/bright_white]", default=True)
         scan_hardware = Confirm.ask("    [bright_white]• Scan Hardware cryptographic devices (TPM, HSM, CPU instruction sets)[/bright_white]", default=True)
-        scan_runtime_artifacts = Confirm.ask("    [bright_white]• Scan Active process memory & dynamic runtime packages[/bright_white]", default=False)
+        if runtime is not None:
+            scan_runtime_artifacts = runtime
+        else:
+            scan_runtime_artifacts = Confirm.ask("    [bright_white]• Scan Active process memory & dynamic runtime packages[/bright_white]", default=True)
         enable_artifacts = scan_certs or scan_binaries or scan_hardware or scan_runtime_artifacts
 
     # --- Pre-Flight Summary Manifest ---
@@ -755,6 +763,8 @@ def scan(
         "ipsec": "bright_cyan",
         "network endpoint": "bright_green",
         "endpoint": "bright_green",
+        "runtime": "bright_cyan",
+        "runtime package": "bright_cyan",
     }
 
     with progress:

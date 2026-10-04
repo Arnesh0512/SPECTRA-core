@@ -103,8 +103,27 @@ class ArtifactScanOrchestrator:
         if getattr(self.config.scanners, "enable_runtime", True):
             if progress_callback:
                 progress_callback("Domain 4/4: Inspecting Process Memory & Dynamic Runtime Packages...", 96.0)
-            runtime_findings = self.runtime_scanner.scan(target_dir)
+            c_target = getattr(getattr(self.config, "scan_targets", None), "container_target", None)
+            runtime_findings = self.runtime_scanner.scan(target_dir=target_dir, container_name=c_target)
             log_info(f"Discovered {len(runtime_findings)} active runtime package/process finding(s).")
+            total_rt = len(runtime_findings)
+            for idx, rf in enumerate(runtime_findings, 1):
+                if progress_callback and total_rt > 0:
+                    pids = rf.raw_metadata.get("pids", [])
+                    procs = rf.raw_metadata.get("processes", [])
+                    proc_tag = f"[{','.join(procs[:2])}] " if procs else ""
+                    pid_tag = f"PID: {','.join(pids[:2])} " if pids else ""
+                    loc_desc = f"{proc_tag}{pid_tag}({rf.file_path})"
+                    progress_callback(
+                        f"Domain 4/4: Active Runtime Process ({idx}/{total_rt}) {Path(rf.file_path).name}",
+                        96.0 + (idx / total_rt) * 3.0,
+                        item_info={
+                            "seq": f"{idx}/{total_rt}",
+                            "type": "runtime",
+                            "filename": Path(rf.file_path).name,
+                            "location": loc_desc,
+                        }
+                    )
 
         all_findings: List[Dict[str, Any]] = []
         for c in cert_findings:
