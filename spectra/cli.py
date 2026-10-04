@@ -499,37 +499,19 @@ def scan(
         scan_source = Confirm.ask("    [bright_white]• Scan codebase source files (AST & Token Analysis)[/bright_white]", default=True)
         scan_deps = Confirm.ask("    [bright_white]• Scan Dependency manifests (SBOM & lockfiles)[/bright_white]", default=False)
 
-        console.print("\n  [bold underline yellow]Domain 2: Cryptographic Artifacts & Binaries[/bold underline yellow]")
-        scan_certs = Confirm.ask("    [bright_white]• Scan X.509 Certificates & Private Keys (.pem, .crt, .key)[/bright_white]", default=True)
-        scan_system_certs = False
-        if scan_certs:
-            if include_system_certs is not None:
-                scan_system_certs = include_system_certs
-            else:
-                from spectra.utils.system_paths import get_os_trust_store_label
-                trust_label = get_os_trust_store_label(target_path)
-                scan_system_certs = Confirm.ask(
-                    f"      [dim]↳ Include preinstalled OS root CA trust store ({trust_label})?[/dim]",
-                    default=False,
-                )
-        scan_docker = Confirm.ask("    [bright_white]• Scan Docker container files (Dockerfile, Compose)[/bright_white]", default=True)
-        scan_binaries = Confirm.ask("    [bright_white]• Scan Binary executables & shared libraries (.so, .dll, ELF)[/bright_white]", default=True)
-        scan_runtime_artifacts = Confirm.ask("    [bright_white]• Scan Active process memory & dynamic runtime packages[/bright_white]", default=False)
-        enable_artifacts = scan_certs or scan_docker or scan_binaries or scan_runtime_artifacts
-
-        console.print("\n  [bold underline magenta]Domain 3: Infrastructure & Cloud Key Management[/bold underline magenta]")
+        console.print("\n  [bold underline magenta]Domain 2: Infrastructure & Cloud Key Management[/bold underline magenta]")
         scan_terraform = Confirm.ask("    [bright_white]• Scan Terraform / IaC configurations (.tf, CloudFormation)[/bright_white]", default=True)
         scan_cloud_hsm = Confirm.ask("    [bright_white]• Scan Cloud KMS / HSM configurations (AWS/Azure/GCP)[/bright_white]", default=True)
         enable_infra = scan_terraform or scan_cloud_hsm
 
-        console.print("\n  [bold underline blue]Domain 4: Network Protocols & TLS Perimeter[/bold underline blue]")
+        console.print("\n  [bold underline blue]Domain 3: Network Protocols & TLS Perimeter[/bold underline blue]")
         enable_network = Confirm.ask("    [bright_white]• Scan live network TLS endpoints & web servers?[/bright_white]", default=True)
         endpoints = []
         if enable_network:
             from spectra.utils.system_paths import parse_endpoint_targets
 
-            # 4.1 Localhost / Container Port Configuration (Prompted before remote endpoints)
-            console.print("  [bold cyan]4.1 Localhost & Container Port Discovery[/bold cyan]")
+            # 3.1 Localhost / Container Port Configuration (Prompted before remote endpoints)
+            console.print("  [bold cyan]3.1 Localhost & Container Port Discovery[/bold cyan]")
             if target_container:
                 c_net = docker_client.get_container_network_ports(target_container)
                 c_ip = c_net.get("ip")
@@ -597,8 +579,8 @@ def scan(
             if endpoints:
                 console.print(f"      [bold green]✔ Registered local/container target(s):[/bold green] [dim]{', '.join(endpoints)}[/dim]\n")
 
-            # 4.2 Remote Domain Endpoints (supports multi-port: domain:443,8443 or domain:443/8443)
-            console.print("  [bold cyan]4.2 Remote Domain Endpoints[/bold cyan]")
+            # 3.2 Remote Domain Endpoints (supports multi-port: domain:443,8443 or domain:443/8443)
+            console.print("  [bold cyan]3.2 Remote Domain Endpoints[/bold cyan]")
             console.print("      [dim]Tip: You can specify multiple ports (e.g. 'domain:443,8443' or 'domain:443, 8443')[/dim]")
             if yes and endpoints_opt is None:
                 endpoints_input = ""
@@ -624,6 +606,24 @@ def scan(
             endpoints = deduped_eps
 
             console.print(f"      [bold green]✔ Total network targets registered: {len(endpoints)} endpoint(s).[/bold green]")
+
+        console.print("\n  [bold underline yellow]Domain 4: Cryptographic Artifacts & Binaries[/bold underline yellow]")
+        scan_certs = Confirm.ask("    [bright_white]• Scan X.509 Certificates & Private Keys (.pem, .crt, .key)[/bright_white]", default=True)
+        scan_system_certs = False
+        if scan_certs:
+            if include_system_certs is not None:
+                scan_system_certs = include_system_certs
+            else:
+                from spectra.utils.system_paths import get_os_trust_store_label
+                trust_label = get_os_trust_store_label(target_path)
+                scan_system_certs = Confirm.ask(
+                    f"      [dim]↳ Include preinstalled OS root CA trust store ({trust_label})?[/dim]",
+                    default=False,
+                )
+        scan_docker = Confirm.ask("    [bright_white]• Scan Docker container files (Dockerfile, Compose)[/bright_white]", default=True)
+        scan_binaries = Confirm.ask("    [bright_white]• Scan Binary executables & shared libraries (.so, .dll, ELF)[/bright_white]", default=True)
+        scan_runtime_artifacts = Confirm.ask("    [bright_white]• Scan Active process memory & dynamic runtime packages[/bright_white]", default=False)
+        enable_artifacts = scan_certs or scan_docker or scan_binaries or scan_runtime_artifacts
 
     # --- Pre-Flight Summary Manifest ---
     preflight_data = {

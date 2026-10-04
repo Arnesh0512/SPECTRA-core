@@ -21,11 +21,12 @@ FROM python:3.11-slim AS runtime
 LABEL maintainer="Security Engineering Team"
 LABEL description="Enterprise Cryptographic Discovery & CycloneDX 1.6 CBOM Generator"
 
-# Install runtime utilities (ripgrep for fast regex search, OpenSSL for binary/cert inspection, Node.js for Web Visualizer)
+# Install runtime utilities (ripgrep for fast regex search, OpenSSL for binary/cert inspection, Nmap for network recon, Node.js for Web Visualizer)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ripgrep \
     openssl \
     ca-certificates \
+    nmap \
     nodejs \
     npm \
     && rm -rf /var/lib/apt/lists/*

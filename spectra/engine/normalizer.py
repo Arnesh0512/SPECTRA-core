@@ -197,6 +197,8 @@ class AssetNormalizer:
             return "fips_pqc_standard"
 
         # 2. Broken Classical Primitives (Disallowed by NIST)
+        if any(tok in algo_u for tok in ["CLEARTEXT", "UNENCRYPTED", "NONE", "NULL"]) or prim_l == "unencrypted_transport":
+            return "broken_classical"
         if "DES" in algo_u and not any(x in algo_u for x in ["3DES", "DES3", "DESEDE", "TRIPLEDES", "ED25519"]):
             return "broken_classical"
         if any(tok in algo_u for tok in ["MD5", "RC4", "ARC4", "ARCFOUR"]):
@@ -469,26 +471,66 @@ class AssetNormalizer:
         )
 
     def _normalize_network(self, finding: Dict[str, Any]) -> NormalizedCryptoAsset:
-        target = finding.get("target") or finding.get("file_path", "endpoint")
-        port = finding.get("port") or finding.get("listen_port", 443)
+        target = (
+            finding.get("target")
+            or finding.get("provenance", {}).get("hostname")
+            or finding.get("file_path", "endpoint")
+        )
+        port = (
+            finding.get("port")
+            or finding.get("provenance", {}).get("port")
+            or finding.get("listen_port", 443)
+        )
         location = f"{target}:{port}"
-        algo = finding.get("cipher_suite") or finding.get("ciphers") or "TLS-Transport"
+        raw_meta = finding.get("raw_metadata", {}).copy()
+        if "cert_subject" in finding and "cert_subject" not in raw_meta:
+            raw_meta["cert_subject"] = finding.get("cert_subject", "")
+        if "cert_issuer" in finding and "cert_issuer" not in raw_meta:
+            raw_meta["cert_issuer"] = finding.get("cert_issuer", "")
+        if "tls_version" in finding and "tls_version" not in raw_meta:
+            raw_meta["tls_version"] = finding.get("tls_version", "")
+
+        ev_type = finding.get("evidence_type")
+        is_cleartext = raw_meta.get("cleartext") or finding.get("tls_version") == "None (Cleartext)"
+
+        if ev_type == "ssh_host_key":
+            algo = finding.get("detected_term") or raw_meta.get("host_key_algorithm") or "SSH-Host-Key"
+            primitive = "public_key"
+            asset_type = "key"
+            name = f"SSH Host Key ({location})"
+            qs = "ed25519" in str(algo).lower()
+            shor_vulnerable = not qs
+        elif is_cleartext:
+            svc = raw_meta.get("service", "cleartext").upper()
+            algo = f"Cleartext-{svc}"
+            primitive = "unencrypted_transport"
+            asset_type = "protocol"
+            name = f"Unencrypted Service ({svc} on {location})"
+            qs = False
+            shor_vulnerable = False
+        else:
+            algo = finding.get("cipher_suite") or finding.get("ciphers") or "TLS-Transport"
+            primitive = "secure_transport"
+            asset_type = "protocol"
+            name = f"Network Session ({location})"
+            qs = finding.get("quantum_safe", False)
+            shor_vulnerable = finding.get("shor_vulnerable", True)
+
         asset_id = self._generate_id("net", location, str(algo))
-        qs = finding.get("quantum_safe", False)
-        nist_status = self.resolve_nist_status(algo, "secure_transport", None, qs)
+        nist_status = self.resolve_nist_status(algo, primitive, None, qs)
         return NormalizedCryptoAsset(
             asset_id=asset_id,
-            name=f"Network Session ({location})",
-            asset_type="protocol",
+            name=name,
+            asset_type=asset_type,
             source_domain="network",
             location=location,
             algorithm=algo,
-            primitive="secure_transport",
+            primitive=primitive,
             quantum_safe=qs,
-            shor_vulnerable=True,
+            shor_vulnerable=shor_vulnerable,
             nist_status=nist_status,
             security_findings=finding.get("security_findings", []),
-            raw_metadata=finding.get("raw_metadata", {}),
+            raw_metadata=raw_meta,
         )
 
     def _normalize_fallback(self, finding: Dict[str, Any]) -> NormalizedCryptoAsset:

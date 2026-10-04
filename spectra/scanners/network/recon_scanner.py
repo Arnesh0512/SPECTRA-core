@@ -13,13 +13,14 @@ import datetime as dt
 import hashlib
 import json
 import re
+import shutil
 import socket
 import ssl
 import subprocess
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 import yaml
 
 from spectra.utils.logger import log_info, log_step
@@ -55,7 +56,7 @@ class NetworkReconFinding:
 
 
 class NetworkReconScanner:
-    """Executes low-impact DNS, port, TLS, and pure Python SSH network reconnaissance[cite: 29]."""
+    """Executes low-impact DNS, port, TLS, and pure Python SSH network reconnaissance."""
 
     def __init__(self, rules_file: Optional[Path] = None):
         if rules_file is None:
@@ -74,8 +75,17 @@ class NetworkReconScanner:
         except Exception:
             return {}
 
+    @staticmethod
+    def is_nmap_available() -> bool:
+        """Returns True if nmap binary is discoverable in system PATH."""
+        return shutil.which("nmap") is not None
+
     def normalize_hostname(self, value: str) -> Optional[str]:
-        value = value.strip().lower().rstrip(".")
+        value = value.strip().lower()
+        value = re.sub(r"^https?://", "", value).rstrip("/")
+        if ":" in value:
+            value = value.split(":")[0]
+        value = value.rstrip(".")
         if not value or any(char.isspace() for char in value):
             return None
         try:
@@ -88,6 +98,134 @@ class NetworkReconScanner:
             except OSError:
                 pass
         return value if HOSTNAME_PATTERN.fullmatch(value) else None
+
+    def run_nmap_scan(
+        self,
+        hostname: str,
+        ports: Optional[List[int]] = None,
+        timeout: float = 30.0,
+    ) -> List[Dict[str, Any]]:
+        """
+        Executes Nmap with light version detection against target hostname.
+        Uses -Pn (bypass ping discovery) and --open (filter closed ports) for fast, reliable scanning.
+        """
+        cmd = ["nmap", "-Pn", "-sV", "--version-light", "-T4", "--open"]
+        if ports:
+            cmd.extend(["-p", ",".join(str(p) for p in sorted(set(ports)))])
+        cmd.extend(["-oX", "-", hostname])
+
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+        except Exception as e:
+            log_info(f"Nmap execution error on {hostname}: {e}")
+            return []
+
+        stdout = proc.stdout or ""
+        xml_idx = stdout.find("<nmaprun")
+        if xml_idx == -1:
+            return []
+
+        try:
+            root = ET.fromstring(stdout[xml_idx:])
+        except ET.ParseError as e:
+            log_info(f"Failed to parse Nmap XML output for {hostname}: {e}")
+            return []
+
+        discovered: List[Dict[str, Any]] = []
+        for host_el in root.findall("host"):
+            status_el = host_el.find("status")
+            if status_el is not None and status_el.get("state") != "up":
+                continue
+
+            ports_el = host_el.find("ports")
+            if ports_el is None:
+                continue
+
+            for port_el in ports_el.findall("port"):
+                port_id_str = port_el.get("portid")
+                if not port_id_str or not port_id_str.isdigit():
+                    continue
+                port_id = int(port_id_str)
+                proto = port_el.get("protocol", "tcp")
+
+                state_el = port_el.find("state")
+                if state_el is None or state_el.get("state") != "open":
+                    continue
+
+                service_el = port_el.find("service")
+                service_name = service_el.get("name", "unknown") if service_el is not None else "unknown"
+                tunnel = service_el.get("tunnel") if service_el is not None else None
+                product = service_el.get("product", "") if service_el is not None else ""
+                version = service_el.get("version", "") if service_el is not None else ""
+                extrainfo = service_el.get("extrainfo", "") if service_el is not None else ""
+
+                s_lower = service_name.lower()
+                is_tls = (
+                    tunnel == "ssl"
+                    or s_lower in {"https", "imaps", "pop3s", "smtps", "ftps", "ldaps", "openvpn", "ssl", "tls"}
+                    or (port_id in self.tls_ports and s_lower not in {"ssh", "telnet"})
+                )
+                is_ssh = (
+                    s_lower == "ssh"
+                    or port_id in self.ssh_ports
+                )
+
+                discovered.append({
+                    "port": port_id,
+                    "protocol": proto,
+                    "service": service_name,
+                    "tunnel": tunnel,
+                    "product": product,
+                    "version": version,
+                    "extrainfo": extrainfo,
+                    "is_tls": is_tls,
+                    "is_ssh": is_ssh,
+                    "observation_source": "nmap",
+                })
+
+        return discovered
+
+    def discover_services(
+        self,
+        hostname: str,
+        ports: Optional[List[int]] = None,
+        timeout: float = 30.0,
+    ) -> Tuple[List[Dict[str, Any]], str]:
+        """
+        Discovers open ports and underlying services using a hybrid approach:
+        - If Nmap is installed, runs rapid service detection (-sV --version-light).
+        - If Nmap is absent or fails, falls back completely to native socket probing.
+        Returns (list_of_services, engine_name).
+        """
+        if self.is_nmap_available():
+            try:
+                services = self.run_nmap_scan(hostname, ports=ports, timeout=timeout)
+                return services, "nmap"
+            except Exception as exc:
+                log_info(f"Nmap scan encountered an issue ({exc}). Falling back to native socket probe.")
+
+        # Complete fallback to native method: blind socket search
+        candidate_ports = ports or self.default_ports
+        open_ports = self.direct_ports(hostname, candidate_ports, timeout=min(timeout, 5.0))
+        services = []
+        for ep in open_ports:
+            p = ep["port"]
+            is_ssh = p in self.ssh_ports
+            is_tls = p in self.tls_ports
+            s_name = "ssh" if is_ssh else ("https" if is_tls else "unknown")
+            services.append({
+                "port": p,
+                "protocol": "tcp",
+                "service": s_name,
+                "tunnel": "ssl" if is_tls else None,
+                "product": "",
+                "version": "",
+                "extrainfo": "",
+                "is_tls": is_tls,
+                "is_ssh": is_ssh,
+                "observation_source": "socket_connect",
+            })
+        return services, "native"
 
     def explicit_targets(self, values: List[str]) -> List[Dict[str, Any]]:
         result = []
