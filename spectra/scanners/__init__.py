@@ -166,6 +166,14 @@ class MasterScanner:
             if progress_callback:
                 progress_callback("Domain 2/4: Skipped by Configuration", 50.0)
 
+        # Harvest referenced SSH and protocol configs discovered in Infrastructure configs (Dockerfiles, Kubernetes, Compose, Terraform)
+        config_discovered_ssh = self._harvest_config_ssh_paths(
+            infrastructure_findings=results.infrastructure_findings,
+            target_dir=resolved_dir,
+        )
+        if config_discovered_ssh:
+            log_info(f"Harvested {len(config_discovered_ssh)} referenced SSH/protocol configuration path(s) from infrastructure declarations.")
+
         # 3. Network and Protocol Scanning (scanned before artifacts to extract Nginx/Apache cert paths)
         if self.config.scanners.enable_network:
             log_step("Domain 3/4: Network & Protocol Analysis")
@@ -177,7 +185,8 @@ class MasterScanner:
             results.network_findings = self.network_orchestrator.scan(
                 target_dir=resolved_dir,
                 endpoints=target_eps,
-                progress_callback=progress_callback
+                progress_callback=progress_callback,
+                config_discovered_ssh_paths=config_discovered_ssh,
             )
             log_info(f"Network scan completed: {len(results.network_findings)} findings.")
             if progress_callback:
@@ -337,6 +346,115 @@ class MasterScanner:
                 if ref:
                     cands.append(ref)
             for ref in meta.get("certificate_paths", []):
+                if ref:
+                    cands.append(ref)
+
+            for cand_str in cands:
+                for resolved_p in _resolve_candidate(cand_str, src_file):
+                    _record_match(resolved_p, src_type)
+
+        return harvested
+
+    def _harvest_config_ssh_paths(
+        self,
+        infrastructure_findings: List[Dict[str, Any]],
+        target_dir: Optional[Path] = None,
+    ) -> Dict[str, str]:
+        """
+        Harvests referenced SSH and protocol configuration file paths from infrastructure findings (Docker, IaC, Terraform).
+        Resolves each candidate path against local filesystem locations (direct, container-relative, target-relative, config-relative, rglob).
+        Returns a mapping of:
+            canonical_path_str -> source_config_name (e.g. 'dockerfile', 'kubernetes', 'terraform')
+        """
+        harvested: Dict[str, str] = {}
+        import re
+
+        def _safe_path(p: Path) -> Path:
+            if "/proc/" in str(p):
+                return p
+            try:
+                return p.resolve()
+            except Exception:
+                return p
+
+        # Identify container root if scanning inside a container
+        c_root: Optional[Path] = None
+        if target_dir:
+            proc_m = re.match(r"^(/proc/\d+/root)", str(target_dir))
+            if proc_m:
+                c_root = Path(proc_m.group(1))
+            else:
+                tmp_m = re.match(r"^(/tmp/spectra_containers/[^/]+)", str(target_dir))
+                if tmp_m:
+                    c_root = Path(tmp_m.group(1))
+
+        def _resolve_candidate(raw_str: str, source_file: Optional[str]) -> List[Path]:
+            cleaned = re.sub(r'^\$\{[^}]+\}[/\\]?', '', raw_str.strip().strip("'\""))
+            if not cleaned:
+                return []
+
+            matched: List[Path] = []
+
+            # 1. Direct path check (e.g. host absolute path)
+            p = Path(cleaned)
+            if p.is_file():
+                matched.append(_safe_path(p))
+
+            # 2. Container root check (for paths absolute inside container like /etc/ssh/sshd_config or /root/.ssh/config)
+            if c_root and c_root.exists():
+                c_cand = c_root / cleaned.lstrip("/\\")
+                if c_cand.is_file():
+                    matched.append(_safe_path(c_cand))
+
+            # 3. Target directory relative check
+            if target_dir and target_dir.exists():
+                c1 = target_dir / cleaned
+                if c1.is_file():
+                    matched.append(_safe_path(c1))
+                c2 = target_dir / cleaned.lstrip("/\\")
+                if c2.is_file():
+                    matched.append(_safe_path(c2))
+
+            # 4. Source config relative check
+            if source_file:
+                cfg_dir = Path(source_file).parent
+                c3 = cfg_dir / cleaned
+                if c3.is_file():
+                    matched.append(_safe_path(c3))
+                c4 = cfg_dir / cleaned.lstrip("/\\")
+                if c4.is_file():
+                    matched.append(_safe_path(c4))
+
+            # 5. Fallback search by filename under target_dir (rglob)
+            fname = Path(cleaned).name
+            if fname and target_dir and target_dir.exists():
+                for m in target_dir.rglob(fname):
+                    if m.is_file():
+                        matched.append(_safe_path(m))
+
+            # 6. Fallback search by filename under container root standard ssh dirs
+            if fname and c_root and c_root.exists():
+                for sub in ["etc/ssh", "etc/ipsec.d", "root/.ssh"]:
+                    c_ssh = c_root / sub / fname
+                    if c_ssh.is_file():
+                        matched.append(_safe_path(c_ssh))
+
+            return matched
+
+        def _record_match(resolved_p: Path, src_type: str):
+            key = str(_safe_path(resolved_p))
+            if key in harvested:
+                if src_type not in harvested[key].split(","):
+                    harvested[key] = f"{harvested[key]},{src_type}"
+            else:
+                harvested[key] = src_type
+
+        for f in infrastructure_findings:
+            src_type = f.get("infra_provider") or f.get("resource_kind", "infrastructure")
+            src_file = f.get("file_path")
+            meta = f.get("raw_metadata", {})
+            cands = []
+            for ref in meta.get("referenced_ssh_paths", []):
                 if ref:
                     cands.append(ref)
 

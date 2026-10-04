@@ -519,8 +519,43 @@ class AssetNormalizer:
 
         ev_type = finding.get("evidence_type")
         is_cleartext = raw_meta.get("cleartext") or finding.get("tls_version") == "None (Cleartext)"
+        proto = finding.get("protocol")
 
-        if ev_type == "ssh_host_key":
+        if proto in ["ssh", "ipsec"]:
+            file_path = finding.get("file_path", "protocol_config")
+            location = file_path
+            ciphers_val = finding.get("ciphers") or []
+            kex_val = finding.get("kex_algorithms") or []
+
+            algo_parts = []
+            if kex_val:
+                algo_parts.append(kex_val[0] if isinstance(kex_val, list) else str(kex_val))
+            if ciphers_val:
+                algo_parts.append(ciphers_val[0] if isinstance(ciphers_val, list) else str(ciphers_val))
+            algo = " / ".join(algo_parts) if algo_parts else f"{proto.upper()}-Transport"
+
+            primitive = "protocol_config"
+            asset_type = "protocol"
+            name = f"{proto.upper()} Config ({Path(file_path).name})"
+            qs = finding.get("quantum_safe", False)
+            shor_vulnerable = finding.get("shor_vulnerable", True)
+            asset_id = self._generate_id(proto, location, str(algo))
+            nist_status = self.resolve_nist_status(algo, primitive, None, qs)
+            return NormalizedCryptoAsset(
+                asset_id=asset_id,
+                name=name,
+                asset_type=asset_type,
+                source_domain="network",
+                location=location,
+                algorithm=algo,
+                primitive=primitive,
+                quantum_safe=qs,
+                shor_vulnerable=shor_vulnerable,
+                nist_status=nist_status,
+                security_findings=finding.get("security_findings", []),
+                raw_metadata=raw_meta,
+            )
+        elif ev_type == "ssh_host_key":
             algo = finding.get("detected_term") or raw_meta.get("host_key_algorithm") or "SSH-Host-Key"
             primitive = "public_key"
             asset_type = "key"

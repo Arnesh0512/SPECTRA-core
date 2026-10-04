@@ -150,9 +150,20 @@ class TerraformScanner:
             content,
             re.IGNORECASE
         )
-        if cert_matches:
+        ssh_matches = [
+            m.strip("'\"") for m in re.findall(
+                r'["\']?([^"\'\s\n\(\)]*(?:sshd_config|ssh_config|ipsec\.conf|\.ssh/config|\.ssh|network/ssh|deployments/ssh))["\']?',
+                content,
+                re.IGNORECASE
+            )
+            if m.strip("'\"")
+        ]
+        if cert_matches or ssh_matches:
             for f in findings:
-                f.raw_metadata.setdefault("referenced_cert_paths", []).extend(cert_matches)
+                if cert_matches:
+                    f.raw_metadata.setdefault("referenced_cert_paths", []).extend(cert_matches)
+                if ssh_matches:
+                    f.raw_metadata.setdefault("referenced_ssh_paths", []).extend(ssh_matches)
             if not findings:
                 findings.append(TerraformFinding(
                     source_domain="infrastructure",
@@ -161,8 +172,11 @@ class TerraformScanner:
                     line_number=1,
                     resource_type="terraform_config",
                     resource_name=file_path.stem,
-                    algorithm="X509-Certificate-Ref",
-                    raw_metadata={"referenced_cert_paths": cert_matches}
+                    algorithm="IaC-Crypto-Reference",
+                    raw_metadata={
+                        "referenced_cert_paths": cert_matches,
+                        "referenced_ssh_paths": ssh_matches
+                    }
                 ))
 
         return findings

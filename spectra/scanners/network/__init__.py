@@ -33,11 +33,12 @@ class NetworkScanOrchestrator:
         target_dir: Optional[Path] = None,
         endpoints: Optional[List[str]] = None,
         progress_callback: Optional[Callable[[str, float], None]] = None,
+        config_discovered_ssh_paths: Optional[Dict[str, str]] = None,
     ) -> List[Dict[str, Any]]:
         """Executes static network audits, live endpoint handshakes, and reconnaissance."""
         all_findings: List[Dict[str, Any]] = []
 
-        # 1. Static Configuration Auditing (Nginx, SSH)
+        # 1. Static Configuration Auditing (Nginx, SSH, IPsec)
         if target_dir and target_dir.exists():
             if progress_callback:
                 progress_callback("Domain 3/4: Auditing Static Nginx & Protocol Configs...", 50.0)
@@ -52,7 +53,10 @@ class NetworkScanOrchestrator:
                 all_findings.append(nf.to_dict())
 
             proto_findings: List[ProtocolFinding] = self.protocol_scanner.scan_directory(
-                target_dir, excluded_dirs=excluded
+                target_dir,
+                excluded_dirs=excluded,
+                progress_callback=progress_callback,
+                config_discovered_ssh_paths=config_discovered_ssh_paths,
             )
             log_info(f"Discovered {len(proto_findings)} protocol configuration(s).")
             for pf in proto_findings:

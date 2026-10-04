@@ -44,3 +44,56 @@ weak_ssh_ciphers:
 weak_ssh_macs:
   - "md5"
   - "sha1"
+
+# --- Rich Knowledge Base of System, Container & User Protocol Paths ---
+ssh_system_locations:
+  # Linux & Unix System Paths
+  - "etc/ssh"
+  - "etc/ssh/sshd_config.d"
+  - "etc/ssh/ssh_config.d"
+  - "etc/ipsec.d"
+  - "etc/strongswan"
+  - "etc/strongswan.d"
+  - "usr/local/etc/ssh"
+  - "opt/homebrew/etc/ssh"
+  - "private/etc/ssh"
+  
+  # Windows OpenSSH System Locations
+  - "ProgramData/ssh"
+  - "Windows/System32/OpenSSH"
+
+  # Container & Project Convention Locations
+  - "network/ssh"
+  - "network/ipsec"
+  - "deployments/ssh"
+  - "deployments/docker/ssh"
+  - "deployments/vpn"
+  - "config/ssh"
+  - "configs/ssh"
+  - "ssh"
+  - ".ssh"
+
+# Target configuration filenames recognized across standard environments
+protocol_config_filenames:
+  - "sshd_config"
+  - "ssh_config"
+  - "ipsec.conf"
+  - "strongswan.conf"
+
+weak_ipsec_ciphers:
+  - "3des"
+  - "des"
+  - "blowfish"
+  - "null"
+
+weak_ipsec_kex:
+  - "modp768"
+  - "modp1024"
+  - "modp1536"
+  - "dh1"
+  - "dh2"
+  - "dh5"
+
+weak_ipsec_hashes:
+  - "md5"
+  - "sha1"

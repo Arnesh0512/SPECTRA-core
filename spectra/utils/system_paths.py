@@ -180,6 +180,98 @@ def get_webserver_config_paths(target_dir: Optional[Path] = None) -> List[Path]:
     return candidate_paths
 
 
+def get_protocol_config_paths(target_dir: Optional[Path] = None) -> List[Path]:
+    """
+    Returns all existing directories likely to contain SSH (server & client) or IPsec
+    configuration files, scanning target_dir, user home directories, and all discovered roots
+    (Linux, WSL, Windows, macOS, container mounts).
+    """
+    candidate_paths: List[Path] = []
+    seen: Set[str] = set()
+
+    def _add_path(p: Path):
+        try:
+            if p.exists() and p.is_dir():
+                key = str(p if "/proc/" in str(p) else p.resolve())
+                if key not in seen:
+                    seen.add(key)
+                    candidate_paths.append(p)
+        except Exception:
+            pass
+
+    # 1. Target directory and common project/container convention subdirectories
+    if target_dir and target_dir.exists():
+        _add_path(target_dir)
+        for sub in [
+            "network/ssh", "network/ipsec", "deployments/ssh", "deployments/docker/ssh",
+            "deployments/vpn", "config/ssh", "configs/ssh", "ssh", ".ssh", ".devcontainer"
+        ]:
+            _add_path(target_dir / sub)
+
+    # 2. System and host SSH/IPsec locations across all discovered roots
+    subdirs = [
+        # Linux & Unix system locations
+        "etc/ssh",
+        "etc/ssh/sshd_config.d",
+        "etc/ssh/ssh_config.d",
+        "etc/ipsec.d",
+        "etc/strongswan",
+        "etc/strongswan.d",
+        "usr/local/etc/ssh",
+        "opt/homebrew/etc/ssh",
+        "private/etc/ssh",
+
+        # Windows OpenSSH system locations
+        "ProgramData/ssh",
+        "Windows/System32/OpenSSH",
+    ]
+
+    for root in discover_root_mounts(target_dir):
+        for sub in subdirs:
+            _add_path(root / sub)
+
+        # Root user SSH folder
+        _add_path(root / "root/.ssh")
+        _add_path(root / "var/root/.ssh")
+
+        # Discover all user home directories on this root (Linux/WSL /home/<user>/.ssh)
+        home_dir = root / "home"
+        if home_dir.exists() and home_dir.is_dir():
+            try:
+                for u_dir in home_dir.iterdir():
+                    if u_dir.is_dir() and not u_dir.name.startswith("."):
+                        _add_path(u_dir / ".ssh")
+            except Exception:
+                pass
+
+        # Discover all user home directories on this root (Windows/macOS /Users/<user>/.ssh)
+        users_dir = root / "Users"
+        if users_dir.exists() and users_dir.is_dir():
+            try:
+                for u_dir in users_dir.iterdir():
+                    if u_dir.is_dir() and not u_dir.name.startswith("."):
+                        _add_path(u_dir / ".ssh")
+            except Exception:
+                pass
+
+    # 3. Current execution user's home directory across OSes
+    try:
+        user_home = Path.home()
+        if user_home.exists():
+            _add_path(user_home / ".ssh")
+            _add_path(user_home / "ssh")
+    except Exception:
+        pass
+
+    # 4. Host user environment variable if running inside container (-e HOST_USER=$USER)
+    host_user = os.environ.get("HOST_USER")
+    if host_user:
+        for u_cand in [Path(f"/home/{host_user}/.ssh"), Path(f"/scan/home/{host_user}/.ssh"), Path(f"/host/home/{host_user}/.ssh")]:
+            _add_path(u_cand)
+
+    return candidate_paths
+
+
 def get_certificate_system_paths(
     target_dir: Optional[Path] = None,
     include_system_certs: bool = False,

@@ -163,6 +163,14 @@ class IaCScanner:
                 content,
                 re.IGNORECASE
             )
+            ssh_matches = [
+                m.strip("'\"") for m in re.findall(
+                    r'["\']?([^"\'\s\n\(\)]*(?:sshd_config|ssh_config|ipsec\.conf|\.ssh/config|\.ssh|network/ssh|deployments/ssh))["\']?',
+                    content,
+                    re.IGNORECASE
+                )
+                if m.strip("'\"")
+            ]
             docs = yaml.safe_load_all(content)
             for doc in docs:
                 if not isinstance(doc, dict):
@@ -174,9 +182,12 @@ class IaCScanner:
                 elif "AWSTemplateFormatVersion" in doc or "Resources" in doc:
                     findings.extend(self._evaluate_cloudformation_doc(file_path, doc))
 
-            if cert_matches:
+            if cert_matches or ssh_matches:
                 for f in findings:
-                    f.raw_metadata.setdefault("referenced_cert_paths", []).extend(cert_matches)
+                    if cert_matches:
+                        f.raw_metadata.setdefault("referenced_cert_paths", []).extend(cert_matches)
+                    if ssh_matches:
+                        f.raw_metadata.setdefault("referenced_ssh_paths", []).extend(ssh_matches)
                 if not findings:
                     mtype = self._detect_manifest_type(file_path)
                     prov = "kubernetes" if mtype == "kubernetes" else ("cloudformation" if mtype == "cloudformation" else "iac")
@@ -185,10 +196,13 @@ class IaCScanner:
                         infra_provider=prov,
                         file_path=str(file_path.resolve()),
                         line_number=1,
-                        resource_kind="manifest_cert_reference",
+                        resource_kind="manifest_crypto_reference",
                         resource_name=file_path.stem,
-                        algorithm="X509-Certificate-Ref",
-                        raw_metadata={"referenced_cert_paths": cert_matches}
+                        algorithm="IaC-Crypto-Reference",
+                        raw_metadata={
+                            "referenced_cert_paths": cert_matches,
+                            "referenced_ssh_paths": ssh_matches
+                        }
                     ))
         except Exception:
             return []
@@ -205,14 +219,25 @@ class IaCScanner:
                 content,
                 re.IGNORECASE
             )
+            ssh_matches = [
+                m.strip("'\"") for m in re.findall(
+                    r'["\']?([^"\'\s\n\(\)]*(?:sshd_config|ssh_config|ipsec\.conf|\.ssh/config|\.ssh|network/ssh|deployments/ssh))["\']?',
+                    content,
+                    re.IGNORECASE
+                )
+                if m.strip("'\"")
+            ]
             data = json.loads(content)
             if isinstance(data, dict):
                 if "AWSTemplateFormatVersion" in data or "Resources" in data:
                     findings.extend(self._evaluate_cloudformation_doc(file_path, data))
 
-            if cert_matches:
+            if cert_matches or ssh_matches:
                 for f in findings:
-                    f.raw_metadata.setdefault("referenced_cert_paths", []).extend(cert_matches)
+                    if cert_matches:
+                        f.raw_metadata.setdefault("referenced_cert_paths", []).extend(cert_matches)
+                    if ssh_matches:
+                        f.raw_metadata.setdefault("referenced_ssh_paths", []).extend(ssh_matches)
                 if not findings:
                     mtype = self._detect_manifest_type(file_path)
                     prov = "cloudformation" if mtype == "cloudformation" else ("azure" if mtype == "azure" else "iac")
@@ -221,10 +246,13 @@ class IaCScanner:
                         infra_provider=prov,
                         file_path=str(file_path.resolve()),
                         line_number=1,
-                        resource_kind="manifest_cert_reference",
+                        resource_kind="manifest_crypto_reference",
                         resource_name=file_path.stem,
-                        algorithm="X509-Certificate-Ref",
-                        raw_metadata={"referenced_cert_paths": cert_matches}
+                        algorithm="IaC-Crypto-Reference",
+                        raw_metadata={
+                            "referenced_cert_paths": cert_matches,
+                            "referenced_ssh_paths": ssh_matches
+                        }
                     ))
         except Exception:
             return []

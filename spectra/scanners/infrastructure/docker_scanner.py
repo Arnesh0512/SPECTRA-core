@@ -142,6 +142,16 @@ class DockerScanner:
             re.IGNORECASE
         )
 
+        # Harvest all referenced SSH and protocol configuration file paths in the Dockerfile
+        ssh_matches = [
+            m.strip("'\"") for m in re.findall(
+                r'["\']?([^"\'\s\n\(\)]*(?:sshd_config|ssh_config|ipsec\.conf|\.ssh/config|\.ssh|network/ssh|deployments/ssh))["\']?',
+                content,
+                re.IGNORECASE
+            )
+            if m.strip("'\"")
+        ]
+
         # 1. Inspect for embedded private key blocks
         for match in self.embedded_key_regex.finditer(content):
             line_no = content[:match.start()].count("\n") + 1
@@ -216,10 +226,13 @@ class DockerScanner:
                 raw_metadata={"variable": var_name, "value": var_val, "host_path": str(file_path)}
             ))
 
-        # 4. Attach referenced certificates to findings or register the Dockerfile itself
-        if cert_matches:
+        # 4. Attach referenced certificates and SSH configs to findings or register the Dockerfile itself
+        if cert_matches or ssh_matches:
             for f in findings:
-                f.raw_metadata.setdefault("referenced_cert_paths", []).extend(cert_matches)
+                if cert_matches:
+                    f.raw_metadata.setdefault("referenced_cert_paths", []).extend(cert_matches)
+                if ssh_matches:
+                    f.raw_metadata.setdefault("referenced_ssh_paths", []).extend(ssh_matches)
 
             if not findings:
                 findings.append(DockerFinding(
@@ -230,12 +243,16 @@ class DockerScanner:
                     resource_kind="dockerfile",
                     resource_name=file_path.name,
                     finding_category="container_definition",
-                    details=f"Dockerfile declares cryptographic asset references ({len(cert_matches)} found)",
+                    details=f"Dockerfile declares cryptographic asset references ({len(cert_matches) + len(ssh_matches)} found)",
                     algorithm="Dockerfile-Environment",
                     quantum_safe=False,
                     shor_vulnerable=True,
                     security_findings=[],
-                    raw_metadata={"referenced_cert_paths": cert_matches, "host_path": str(file_path)}
+                    raw_metadata={
+                        "referenced_cert_paths": cert_matches,
+                        "referenced_ssh_paths": ssh_matches,
+                        "host_path": str(file_path)
+                    }
                 ))
         elif not findings:
             # Baseline entry for clean Dockerfile

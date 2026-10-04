@@ -443,34 +443,31 @@ def scan(
         scan_cloud_hsm = True
         enable_infra = True
         endpoints = []
-        if endpoints_opt or ports or target_container:
-            enable_network = True
-            from spectra.utils.system_paths import parse_endpoint_targets
-            if target_container:
-                c_net = docker_client.get_container_network_ports(target_container)
-                c_ip = c_net.get("ip")
-                exposed = c_net.get("exposed_ports", [])
-                bindings = c_net.get("port_bindings", {})
-                target_ports = [int(p.strip()) for p in ports.split(",") if p.strip().isdigit()] if ports else [p for p in exposed if p in [443, 8443, 8080, 8444, 9443, 4443]] or [443, 8443]
-                for p_int in target_ports:
-                    if c_ip:
-                        endpoints.append(f"{c_ip}:{p_int}")
-                    if p_int in bindings:
-                        for hp in bindings[p_int]:
-                            endpoints.append(f"localhost:{hp}")
-                    elif not c_ip:
-                        endpoints.append(f"localhost:{p_int}")
-            elif ports:
-                for p_str in ports.split(","):
-                    if p_str.strip().isdigit():
-                        endpoints.append(f"localhost:{int(p_str.strip())}")
-            if endpoints_opt:
-                endpoints.extend(parse_endpoint_targets(endpoints_opt))
-            # Deduplicate
-            seen_eps = set()
-            endpoints = [e for e in endpoints if not (e in seen_eps or seen_eps.add(e))]
-        else:
-            enable_network = False
+        enable_network = True
+        from spectra.utils.system_paths import parse_endpoint_targets
+        if target_container:
+            c_net = docker_client.get_container_network_ports(target_container)
+            c_ip = c_net.get("ip")
+            exposed = c_net.get("exposed_ports", [])
+            bindings = c_net.get("port_bindings", {})
+            target_ports = [int(p.strip()) for p in ports.split(",") if p.strip().isdigit()] if ports else [p for p in exposed if p in [443, 8443, 8080, 8444, 9443, 4443]] or [443, 8443]
+            for p_int in target_ports:
+                if c_ip:
+                    endpoints.append(f"{c_ip}:{p_int}")
+                if p_int in bindings:
+                    for hp in bindings[p_int]:
+                        endpoints.append(f"localhost:{hp}")
+                elif not c_ip:
+                    endpoints.append(f"localhost:{p_int}")
+        elif ports:
+            for p_str in ports.split(","):
+                if p_str.strip().isdigit():
+                    endpoints.append(f"localhost:{int(p_str.strip())}")
+        if endpoints_opt:
+            endpoints.extend(parse_endpoint_targets(endpoints_opt))
+        # Deduplicate
+        seen_eps = set()
+        endpoints = [e for e in endpoints if not (e in seen_eps or seen_eps.add(e))]
     else:
         _render_step_card(
             2, 4,
@@ -753,6 +750,9 @@ def scan(
         "cbom": "dim cyan",
         "config": "dim white",
         "nginx": "bright_yellow",
+        "ssh": "bright_yellow",
+        "protocol": "bright_cyan",
+        "ipsec": "bright_cyan",
         "network endpoint": "bright_green",
         "endpoint": "bright_green",
     }
