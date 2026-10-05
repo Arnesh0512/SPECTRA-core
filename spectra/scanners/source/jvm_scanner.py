@@ -87,7 +87,7 @@ class JVMScanner(BaseSourceScanner):
             return []
 
         def _add_finding(finding: SourceFinding, symbol_name: str) -> None:
-            dirs, trans, depth = self.compute_call_metrics(file_path, symbol_name)
+            dirs, trans, depth = self.compute_call_metrics(file_path, symbol_name, line_number=finding.line_number)
             finding.direct_calls = dirs
             finding.transitive_calls = trans
             finding.call_depth = depth

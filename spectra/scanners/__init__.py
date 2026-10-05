@@ -144,6 +144,7 @@ class MasterScanner:
                         }
                     )
 
+
             results.source_findings = [f.to_dict() for f in all_source_raw]
             log_info(f"Source scan completed: {len(results.source_findings)} findings.")
             if progress_callback:

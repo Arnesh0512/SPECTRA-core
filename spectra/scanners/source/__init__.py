@@ -14,6 +14,7 @@ from spectra.utils.logger import log_info, log_step, log_warning
 from spectra.utils.shell import command_exists, run_command
 
 from .base import BaseSourceScanner, SourceFinding
+from .callgraph import CallGraphEngine, get_shared_callgraph_engine
 from .python_scanner import PythonASTScanner
 from .jvm_scanner import JVMScanner
 from .js_ts_scanner import JSTSSParser
@@ -30,6 +31,9 @@ class SourceScanOrchestrator:
     def __init__(self, config: ScanConfig, rule_engine: RuleEngine = DEFAULT_RULE_ENGINE):
         self.config = config
         self.rule_engine = rule_engine
+        self.callgraph_engine = get_shared_callgraph_engine(
+            excluded_dirs=self.config.source_scanner.excluded_directories
+        )
         self.scanners: List[BaseSourceScanner] = [
             PythonASTScanner(rule_engine=self.rule_engine),
             JVMScanner(rule_engine=self.rule_engine),
@@ -42,6 +46,7 @@ class SourceScanOrchestrator:
         self.ecosystem_to_scanner: Dict[str, BaseSourceScanner] = {}
         
         for scanner in self.scanners:
+            scanner.callgraph_engine = self.callgraph_engine
             for ext in scanner.supported_extensions():
                 self.ext_to_scanner[ext] = scanner
             
@@ -62,6 +67,8 @@ class SourceScanOrchestrator:
                 self.ecosystem_to_scanner["cpp"] = scanner
 
         self.dependency_scanner = DependencyScanner()
+        if hasattr(self.dependency_scanner, "analyzer"):
+            self.dependency_scanner.analyzer.callgraph_engine = self.callgraph_engine
 
         # Build dynamic regex pattern for pre-filtering
         self.dynamic_crypto_regex = self._build_dynamic_regex()
@@ -71,6 +78,11 @@ class SourceScanOrchestrator:
         log_step(f"Scanning source code in: {target_dir}")
         all_findings: List[SourceFinding] = []
         excluded = self.config.source_scanner.excluded_directories
+
+        # Configure callgraph engine root context
+        self.callgraph_engine.project_root = target_dir
+        if hasattr(self.dependency_scanner, "analyzer"):
+            self.dependency_scanner.analyzer.callgraph_engine = self.callgraph_engine
 
         # 1. Dependency Analysis & Deep Disk/Function Scanning (Phase 2)
         dep_findings = self.dependency_scanner.scan_directory(
@@ -91,7 +103,11 @@ class SourceScanOrchestrator:
 
         # 2. Tier 1: Discover candidate files with crypto signatures
         candidate_files = self._find_candidates(target_dir)
-        log_info(f"Identified {len(candidate_files)} candidate crypto source file(s) for deep analysis.")
+        total_sig_lines = sum(len(lines) for lines in getattr(self, "candidate_lines", {}).values())
+        if total_sig_lines > 0:
+            log_info(f"Identified {len(candidate_files)} candidate crypto source file(s) across {total_sig_lines} detected artifact signature line(s).")
+        else:
+            log_info(f"Identified {len(candidate_files)} candidate crypto source file(s) for deep analysis.")
 
         # 3. Tier 2: Deep AST / syntax analysis
         total_candidates = len(candidate_files)
@@ -240,27 +256,48 @@ class SourceScanOrchestrator:
         return r"\b(" + "|".join(sorted_tokens) + r")"
 
     def _run_ripgrep_filter(self, target_dir: Path) -> Set[Path]:
-        """Executes optimized ripgrep subprocess with exclusion and multiline matching."""
+        """
+        Executes optimized ripgrep subprocess with exclusion and line number isolation.
+        Automatically respects .gitignore and user directory exclusions.
+        """
         candidates: Set[Path] = set()
+        matched_lines_by_file: Dict[Path, Set[int]] = {}
         ext_globs = [g for ext in self.ext_to_scanner.keys() for g in ("-g", f"*{ext}")]
         exclude_globs = [g for ex in self.config.source_scanner.excluded_directories for g in ("-g", f"!**/{ex}/**")]
 
         cmd = [
-            "rg", "-l", "-L", "--no-messages", "--color", "never", "--mmap", "--max-filesize", "5M",
+            "rg", "-n", "-L", "--no-messages", "--color", "never", "--mmap", "--max-filesize", "5M",
             "-e", self.dynamic_crypto_regex, *ext_globs, *exclude_globs, str(target_dir)
         ]
 
         exit_code, stdout, stderr = run_command(cmd)
         if exit_code in (0, 1):
             for line in stdout.splitlines():
-                if line.strip():
-                    p = Path(line.strip())
-                    if not str(p).startswith("/proc/"):
-                        try:
-                            p = p.resolve()
-                        except Exception:
-                            pass
-                    candidates.add(p)
+                if not line.strip():
+                    continue
+                if len(line) >= 2 and line[1] == ":" and (line[2] == "\\" or line[2] == "/"):
+                    drive = line[:2]
+                    rest = line[2:]
+                    parts = rest.split(":", 2)
+                    p_str = drive + parts[0]
+                    line_num = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
+                else:
+                    parts = line.split(":", 2)
+                    p_str = parts[0]
+                    line_num = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
+
+                p = Path(p_str.strip())
+                if not str(p).startswith("/proc/"):
+                    try:
+                        p = p.resolve()
+                    except Exception:
+                        pass
+                candidates.add(p)
+                if p not in matched_lines_by_file:
+                    matched_lines_by_file[p] = set()
+                matched_lines_by_file[p].add(line_num)
+
+            self.candidate_lines = matched_lines_by_file
             return candidates
 
         log_warning(f"ripgrep returned code {exit_code} ({stderr.strip()}), falling back to Python file walker.")

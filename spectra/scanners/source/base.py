@@ -94,11 +94,18 @@ class BaseSourceScanner(ABC):
         except Exception:
             return ""
 
-    def compute_call_metrics(self, file_path: Path, symbol_name: str) -> tuple[int, int, int]:
+    def compute_call_metrics(
+        self,
+        file_path: Path,
+        symbol_name: str,
+        line_number: int = 0
+    ) -> tuple[int, int, int]:
         """
-        Uses fast, targeted ripgrep to trace direct callers and compute blast radius metrics.
+        Uses CallGraphEngine to resolve enclosing user function (abcd),
+        trace direct callers (efgh), and recursively map indirect callers (ijkl)
+        to compute exact tree depth and blast radius metrics.
         """
-        if not symbol_name:
+        if not symbol_name and line_number <= 0:
             return 0, 0, 0
 
         # Don't compute blast radius for external system/vendor libraries
@@ -106,60 +113,8 @@ class BaseSourceScanner(ABC):
         if any(p in lower_parts for p in ["node_modules", "site-packages", ".venv", "vendor", ".m2", "program files", "usr", "target", ".gradle", "build"]):
             return 0, 0, 0
 
-        cache_key = (str(file_path), symbol_name)
-        if not hasattr(self, "_metrics_cache"):
-            self._metrics_cache = {}
-        if cache_key in self._metrics_cache:
-            return self._metrics_cache[cache_key]
+        if not hasattr(self, "callgraph_engine") or getattr(self, "callgraph_engine", None) is None:
+            from .callgraph import get_shared_callgraph_engine
+            self.callgraph_engine = get_shared_callgraph_engine()
 
-        if not command_exists("rg"):
-            return 0, 0, 0
-
-        project_root = file_path.parent.parent
-        direct_call_files: Set[str] = set()
-
-        EXCLUDE_ARGS = [
-            "-L",
-            "-g", "!**/target/**",
-            "-g", "!**/.gradle/**",
-            "-g", "!**/node_modules/**",
-            "-g", "!**/.venv/**",
-            "-g", "!**/build/**",
-            "-g", "!**/dist/**",
-            "-g", "!**/.git/**",
-            "-g", "!**/vendor/**",
-            "-g", "!**/.m2/**",
-        ]
-
-        # Find direct callers referencing symbol_name or importing the module file stem
-        file_stem = file_path.stem
-        search_terms = [symbol_name]
-        COMMON_STEMS = {"main", "init", "config", "app", "util", "utils", "test", "tests", "base", "types", "index", "common", "constants"}
-        if len(file_stem) >= 4 and file_stem.lower() not in COMMON_STEMS:
-            search_terms.append(file_stem)
-
-        curr_file_str = str(file_path) if "/proc/" in str(file_path) else str(file_path.resolve())
-        visited_files = {curr_file_str}
-
-        for term in search_terms:
-            if len(term) < 2:
-                continue
-            cmd = ["rg", "-w", "--no-heading", "--line-number", *EXCLUDE_ARGS, term, str(project_root)]
-            code, stdout, _ = run_command(cmd)
-            if code in (0, 1) and stdout:
-                for line in stdout.splitlines():
-                    parts = line.split(":", 2)
-                    if len(parts) >= 2:
-                        p_str = parts[0]
-                        matched_file = p_str if "/proc/" in p_str else str(Path(p_str).resolve())
-                        if matched_file not in visited_files:
-                            direct_call_files.add(matched_file)
-                            visited_files.add(matched_file)
-
-        direct_calls_count = len(direct_call_files)
-        transitive_calls = int(direct_calls_count * 1.5)
-        call_depth = min(3, direct_calls_count)
-
-        res = (direct_calls_count, transitive_calls, call_depth)
-        self._metrics_cache[cache_key] = res
-        return res
+        return self.callgraph_engine.compute_blast_radius(file_path, symbol_name, line_number=line_number)

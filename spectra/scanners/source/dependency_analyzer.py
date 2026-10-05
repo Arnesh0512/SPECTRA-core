@@ -489,8 +489,45 @@ class DependencyAnalyzer:
             all_callers = base_pkg_callers | func_callers
 
             direct_calls = len(all_callers)
-            transitive_calls = int(direct_calls * 1.5)
-            call_depth = min(3, direct_calls)
+            
+            # Trace multi-level indirect callers and depth through CallGraphEngine
+            engine = getattr(self, "callgraph_engine", None)
+            if not engine:
+                from .callgraph import get_shared_callgraph_engine
+                engine = get_shared_callgraph_engine(project_root=project_root)
+                self.callgraph_engine = engine
+
+            indirect_callers = set()
+            visited = set()
+            current_queue = set()
+            for c_file_str in all_callers:
+                c_path = Path(c_file_str)
+                c_fn, _ = engine.find_enclosing_function(c_path, 1)
+                caller_func = c_fn or c_path.stem
+                k = (str(c_path.resolve()) if not str(c_path).startswith("/proc/") else str(c_path), caller_func)
+                visited.add(k)
+                current_queue.add((c_path, caller_func))
+
+            depth = 1 if direct_calls > 0 else 0
+            while current_queue and depth < 10:
+                next_queue = set()
+                for f, fn in current_queue:
+                    callers = engine.find_callers(f, fn)
+                    for cf, cfn in callers:
+                        k = (str(cf.resolve()) if not str(cf).startswith("/proc/") else str(cf), cfn)
+                        if k not in visited:
+                            visited.add(k)
+                            next_queue.add((cf, cfn))
+                            indirect_callers.add((cf, cfn))
+                if not next_queue:
+                    break
+                depth += 1
+                current_queue = next_queue
+                if len(indirect_callers) > 200:
+                    break
+
+            transitive_calls = len(indirect_callers)
+            call_depth = depth
 
             results.append({
                 "module_name": package_name,

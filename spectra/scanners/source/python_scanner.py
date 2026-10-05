@@ -167,7 +167,7 @@ class CryptoASTVisitor(ast.NodeVisitor):
 
         # Compute call-graph and LOC metrics using BaseSourceScanner ripgrep helper
         symbol_name = full_call_name.split(".")[-1]
-        dirs, trans, depth = self.scanner_ref.compute_call_metrics(self.file_path, symbol_name)
+        dirs, trans, depth = self.scanner_ref.compute_call_metrics(self.file_path, symbol_name, line_number=node.lineno)
 
         finding = SourceFinding(
             language="python",

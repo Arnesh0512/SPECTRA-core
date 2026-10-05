@@ -124,7 +124,8 @@ class DependencyScanner:
         start_pct = 5.0
         end_pct = 12.0
 
-        analyzed_packages: Set[Tuple[str, str]] = set()
+        analyzed_cache: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+        seen_findings: Set[Tuple[str, str, int]] = set()
 
         for idx, (file_path, ecosystem, raw) in enumerate(candidate_deps, start=1):
             t_start = time.time()
@@ -156,17 +157,30 @@ class DependencyScanner:
                     }
                 )
 
-            finding = self._build_finding(raw, ecosystem, target_dir, file_path)
-            findings.append(finding)
-
             pkg_key = (ecosystem, pkg_name.lower())
-            if scanners_map and pkg_key not in analyzed_packages:
-                analyzed_packages.add(pkg_key)
-                analysis_results = self.analyzer.analyze_dependency(
-                    pkg_name, ecosystem, target_dir, scanners_map, manifest_file=file_path
-                )
-                for res in analysis_results:
-                    findings.append(self._build_analysis_finding(res, target_dir, file_path, ecosystem=ecosystem))
+            has_internal_analysis = False
+            if scanners_map:
+                if pkg_key not in analyzed_cache:
+                    analyzed_cache[pkg_key] = self.analyzer.analyze_dependency(
+                        pkg_name, ecosystem, target_dir, scanners_map, manifest_file=file_path
+                    )
+                analysis_results = analyzed_cache[pkg_key]
+                if analysis_results:
+                    has_internal_analysis = True
+                    for res in analysis_results:
+                        f_item = self._build_analysis_finding(res, target_dir, file_path, ecosystem=ecosystem)
+                        key = (f_item.algorithm, f_item.file_path, f_item.line_number)
+                        if key not in seen_findings:
+                            seen_findings.add(key)
+                            findings.append(f_item)
+
+            # Only fallback to unanalyzed package-level finding if no internal functions were analyzed
+            if not has_internal_analysis:
+                finding = self._build_finding(raw, ecosystem, target_dir, file_path, installed_path=installed_path)
+                key = (finding.algorithm, finding.file_path, finding.line_number)
+                if key not in seen_findings:
+                    seen_findings.add(key)
+                    findings.append(finding)
 
             # Maintain animation fidelity so user can see each language and module
             elapsed = time.time() - t_start
@@ -177,12 +191,14 @@ class DependencyScanner:
 
     def _build_analysis_finding(self, res: Dict[str, Any], root: Path, file: Path, ecosystem: str = "dependency") -> SourceFinding:
         """Constructs an enriched finding with internal encryption and call graph metrics (Step 4)."""
-        file_p = str(file) if "/proc/" in str(file) else str(file.resolve())
+        actual_file = res.get("file_path") or str(file)
+        file_p = str(actual_file) if "/proc/" in str(actual_file) else str(Path(actual_file).resolve())
+        line_num = int(res.get("line_number") or 1)
         return SourceFinding(
             source_domain="source_code",
             language=ecosystem,
             file_path=file_p,
-            line_number=res.get("line_number", 1),
+            line_number=line_num,
             column_number=1,
             code_snippet=f"Module: {res['module_name']} | Function: {res['function_called']} | Internal Crypto: {res['encryption_internally']}",
             primitive="cryptographic_operation",
@@ -209,10 +225,24 @@ class DependencyScanner:
             }
         )
 
-    def _build_finding(self, raw: Dict[str, Any], ecosystem: str, root: Path, file: Path) -> SourceFinding:
-        file_p = str(file) if "/proc/" in str(file) else str(file.resolve())
+    def _build_finding(self, raw: Dict[str, Any], ecosystem: str, root: Path, file: Path, installed_path: Optional[Path] = None) -> SourceFinding:
+        if installed_path and installed_path.exists():
+            if installed_path.is_file():
+                file_p = str(installed_path) if "/proc/" in str(installed_path) else str(installed_path.resolve())
+            else:
+                entry_candidates = ["index.js", "index.ts", "main.js", "__init__.py", "lib.rs", "main.go"]
+                chosen = None
+                for cand in entry_candidates:
+                    if (installed_path / cand).is_file():
+                        chosen = installed_path / cand
+                        break
+                target = chosen if chosen else installed_path
+                file_p = str(target) if "/proc/" in str(target) else str(target.resolve())
+            line_num = 1
+        else:
+            file_p = str(file) if "/proc/" in str(file) else str(file.resolve())
+            line_num = int(raw.get("line") or 1)
         rel_path = str(file.relative_to(root).as_posix()) if file.is_relative_to(root) else file_p
-        line_num = int(raw.get("line") or 1)
         pkg_name = str(raw["name"])
         version = raw.get("version")
 
