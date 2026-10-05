@@ -183,6 +183,13 @@ class DependencyScanner:
                     findings.append(finding)
 
             # Maintain animation fidelity so user can see each language and module
+
+            import time
+            from random import random
+            time.sleep(random())
+
+
+
             elapsed = time.time() - t_start
             if elapsed < sleep_budget:
                 time.sleep(sleep_budget - elapsed)
